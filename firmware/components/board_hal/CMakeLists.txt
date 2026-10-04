@@ -15,16 +15,19 @@
 idf_component_register(
     SRCS
         "board_hal.c"
+        "board_event.c"
         "board_display.c"
         "board_touch.c"
         "board_button.c"
         "board_power.c"
         "board_audio.c"
         "board_wifi.c"
+        "board_rtc.c"
     INCLUDE_DIRS "."
     WHOLE_ARCHIVE
     REQUIRES
         waveshare__esp32_s3_touch_amoled_2_16
+        waveshare__pcf85063a
         espressif__esp_codec_dev
         espressif__esp_lcd_co5300
         esp_lcd
@@ -37,4 +40,10 @@ idf_component_register(
         nvs_flash
         esp_timer
         esp_rom
+)
+
+# Intercept POSIX settimeofday and clock_settime so they automatically persist to hardware RTC
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=settimeofday"
+    "-Wl,--wrap=clock_settime"
 )

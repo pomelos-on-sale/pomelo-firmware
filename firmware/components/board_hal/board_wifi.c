@@ -107,6 +107,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         switch (id) {
         case WIFI_EVENT_SCAN_DONE:
             on_scan_done();
+            {
+                hal_event_t ev = {
+                    .type = HAL_EVENT_WIFI,
+                    .data.wifi = { .type = HAL_WIFI_EVENT_SCAN_DONE, .status = 0 },
+                };
+                hal_event_send(&ev);
+            }
             break;
 
         case WIFI_EVENT_STA_CONNECTED:
@@ -125,6 +132,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             s_rssi = 0;
             unlock();
             ESP_LOGI(TAG, "Wi-Fi disconnected");
+            {
+                hal_event_t ev = {
+                    .type = HAL_EVENT_WIFI,
+                    .data.wifi = { .type = HAL_WIFI_EVENT_DISCONNECTED, .status = 0 },
+                };
+                hal_event_send(&ev);
+            }
             break;
 
         default:
@@ -154,6 +168,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_conn_state = HAL_WIFI_STATE_CONNECTED;
         unlock();
         ESP_LOGI(TAG, "Wi-Fi connected: ip=%s rssi=%d", ip, (int)rssi);
+        {
+            hal_event_t sys_ev = {
+                .type = HAL_EVENT_WIFI,
+                .data.wifi = { .type = HAL_WIFI_EVENT_CONNECTED, .status = rssi },
+            };
+            hal_event_send(&sys_ev);
+        }
     }
 }
 

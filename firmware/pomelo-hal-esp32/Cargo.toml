@@ -18,3 +18,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 pomelo-hal = { git = "https://github.com/pomelos-on-sale/pomelo-hal.git", rev = "80af97fdcbe15592b28f8fdbf2047308ad406551" }
+
+[patch."https://github.com/pomelos-on-sale/pomelo-hal.git"]
+pomelo-hal = { path = "../../../pomelo-hal" }
+

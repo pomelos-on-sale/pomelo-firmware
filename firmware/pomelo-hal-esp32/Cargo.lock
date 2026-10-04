@@ -5,7 +5,6 @@ version = 4
 [[package]]
 name = "pomelo-hal"
 version = "0.1.0"
-source = "git+https://github.com/pomelos-on-sale/pomelo-hal.git?rev=80af97fdcbe15592b28f8fdbf2047308ad406551#80af97fdcbe15592b28f8fdbf2047308ad406551"
 
 [[package]]
 name = "pomelo-hal-esp32"

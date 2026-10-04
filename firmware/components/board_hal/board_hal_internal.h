@@ -23,11 +23,6 @@ esp_err_t board_touch_init(void);
  */
 esp_err_t board_button_init(void);
 
-/**
- * @brief Check if AXP2101 PEKEY (Power button) is pressed.
- */
-bool hal_power_pekey_is_pressed(void);
-
 #ifdef __cplusplus
 }
 #endif

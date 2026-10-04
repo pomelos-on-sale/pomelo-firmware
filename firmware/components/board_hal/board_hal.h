@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <time.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -82,16 +83,56 @@ typedef enum {
     HAL_BUTTON_EVENT_SIDE_RELEASE,
 } hal_button_event_t;
 
-/**
- * @brief Wait for a button event from the FreeRTOS event queue.
- *
- * Blocks the calling task for up to timeout_ms milliseconds (0 for non-blocking poll).
- *
- * @param[out] out_event Pointer to store received event.
- * @param[in]  timeout_ms Maximum time to wait in milliseconds.
- * @return true if an event was received, false on timeout.
- */
-bool hal_button_wait_event(hal_button_event_t *out_event, uint32_t timeout_ms);
+/* ---------------------------------------------------------------------------
+ * Unified Hardware Event Queue
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+    HAL_EVENT_NONE = 0,
+    HAL_EVENT_BUTTON,
+    HAL_EVENT_POWER,
+    HAL_EVENT_WIFI,
+} hal_event_type_t;
+
+typedef enum {
+    HAL_POWER_STATE_CHARGING_STARTED = 1,
+    HAL_POWER_STATE_CHARGING_STOPPED,
+    HAL_POWER_STATE_BATTERY_UPDATE,
+    HAL_POWER_STATE_PEKEY_SHORT,
+    HAL_POWER_STATE_PEKEY_LONG,
+} hal_power_state_t;
+
+typedef struct {
+    hal_power_state_t state;
+    int32_t           percent;
+    int32_t           voltage_mv;
+    bool              is_charging;
+} hal_power_event_t;
+
+typedef enum {
+    HAL_WIFI_EVENT_CONNECTED = 1,
+    HAL_WIFI_EVENT_DISCONNECTED,
+    HAL_WIFI_EVENT_SCAN_DONE,
+} hal_wifi_event_type_t;
+
+typedef struct {
+    hal_wifi_event_type_t type;
+    int32_t               status;
+} hal_wifi_event_t;
+
+typedef struct {
+    hal_event_type_t type;
+    union {
+        hal_button_event_t button;
+        hal_power_event_t  power;
+        hal_wifi_event_t   wifi;
+    } data;
+} hal_event_t;
+
+esp_err_t hal_event_init(void);
+bool hal_event_send(const hal_event_t *ev);
+bool hal_event_send_from_isr(const hal_event_t *ev);
+bool hal_event_wait(hal_event_t *out_event, uint32_t timeout_ms);
 
 /* ---------------------------------------------------------------------------
  * AXP2101 PMIC power management.
@@ -214,6 +255,15 @@ esp_err_t hal_audio_set_volume(uint8_t volume);
  * @brief Close audio codec
  */
 esp_err_t hal_audio_close(void);
+
+/* ---------------------------------------------------------------------------
+ * PCF85063A Real-Time Clock (RTC).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Initialize PCF85063A RTC on the shared I2C bus and restore POSIX system clock if valid.
+ */
+esp_err_t hal_rtc_init(void);
 
 
 #ifdef __cplusplus

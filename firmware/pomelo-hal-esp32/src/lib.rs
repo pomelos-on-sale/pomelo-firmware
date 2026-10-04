@@ -40,6 +40,7 @@ mod input;
 mod mic;
 mod power;
 mod wifi;
+mod event;
 
 use std::sync::Arc;
 
@@ -58,12 +59,14 @@ pub use wifi::EspWifi;
 /// device's half of it: `rust_main` builds [`board`] and hands it to the launcher, while a
 /// desktop test builds `pomelo_hal::Board::simulated()`.
 pub fn board() -> Arc<Board> {
-    Arc::new(Board::from_backends(
+    let board = Arc::new(Board::from_backends(
         Box::new(power::EspPower::new()),
         Box::new(wifi::EspWifi::new()),
         Box::new(audio::EspAudio::new()),
         Box::new(mic::EspMic::new()),
         Box::new(imu::EspImu::new()),
         Box::new(input::EspInput::new()),
-    ))
+    ));
+    event::start_event_pump(Arc::clone(&board));
+    board
 }

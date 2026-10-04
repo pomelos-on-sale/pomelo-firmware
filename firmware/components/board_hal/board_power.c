@@ -3,6 +3,8 @@
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "board_power";
 
@@ -37,6 +39,8 @@ static const char *TAG = "board_power";
 #define AXP2101_PEKEY_PRESS_MASK     0x03  /* Bit 1: Short press, Bit 0: Long press */
 
 static i2c_master_dev_handle_t s_axp2101_dev = NULL;
+static TaskHandle_t s_power_task = NULL;
+static void power_monitor_task(void *arg);
 
 static esp_err_t axp2101_write_reg(uint8_t reg, uint8_t val)
 {
@@ -158,6 +162,10 @@ esp_err_t hal_power_init(void)
         axp2101_write_reg(AXP2101_REG_INTEN1, reg41);
     }
 
+    if (s_power_task == NULL) {
+        xTaskCreatePinnedToCore(power_monitor_task, "board_pwr_mon", 3072, NULL, 1, &s_power_task, 0);
+    }
+
     return ESP_OK;
 }
 
@@ -205,17 +213,64 @@ int32_t hal_power_get_battery_voltage_mv(void)
     return 0;
 }
 
-bool hal_power_pekey_is_pressed(void)
+static void power_monitor_task(void *arg)
 {
-    if (!s_axp2101_dev) {
-        return false;
+    (void)arg;
+    ESP_LOGI(TAG, "Power monitor task started on Core %d", xPortGetCoreID());
+
+    int32_t last_percent = -1;
+    bool last_charging = false;
+    uint32_t tick_count = 0;
+
+    // Initial reading
+    last_percent = hal_power_get_battery_percent();
+    last_charging = hal_power_is_charging();
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        tick_count++;
+
+        if (!s_axp2101_dev) {
+            continue;
+        }
+
+        // 1. Check AXP2101 PEKEY IRQ status (Power button press)
+        uint8_t irq1 = 0;
+        if (axp2101_read_reg(AXP2101_REG_INTSTS1, &irq1) == ESP_OK && (irq1 & AXP2101_PEKEY_PRESS_MASK) != 0) {
+            axp2101_write_reg(AXP2101_REG_INTSTS1, irq1 & AXP2101_PEKEY_PRESS_MASK);
+            hal_event_t ev = {
+                .type = HAL_EVENT_BUTTON,
+                .data.button = HAL_BUTTON_EVENT_PWR_PRESS,
+            };
+            hal_event_send(&ev);
+        }
+
+        // 2. Check charging state changes (VBUS insert/remove)
+        bool charging = hal_power_is_charging();
+        bool charging_changed = (charging != last_charging);
+
+        // 3. Check battery percentage (read every 10 seconds or immediately on charging change)
+        bool check_percent = (tick_count % 20 == 0) || charging_changed;
+        if (check_percent) {
+            int32_t percent = hal_power_get_battery_percent();
+            int32_t voltage = hal_power_get_battery_voltage_mv();
+
+            if (percent != last_percent || charging_changed) {
+                last_percent = percent;
+                last_charging = charging;
+
+                hal_event_t ev = {
+                    .type = HAL_EVENT_POWER,
+                    .data.power = {
+                        .state = charging ? HAL_POWER_STATE_CHARGING_STARTED : HAL_POWER_STATE_CHARGING_STOPPED,
+                        .percent = percent,
+                        .voltage_mv = voltage,
+                        .is_charging = charging,
+                    },
+                };
+                hal_event_send(&ev);
+            }
+        }
     }
-    uint8_t irq1 = 0;
-    if (axp2101_read_reg(AXP2101_REG_INTSTS1, &irq1) == ESP_OK &&
-        (irq1 & AXP2101_PEKEY_PRESS_MASK) != 0) {
-        // Clear PEKEY short press (bit 1) & long press (bit 0) IRQ flags by writing 1s back
-        axp2101_write_reg(AXP2101_REG_INTSTS1, irq1 & AXP2101_PEKEY_PRESS_MASK);
-        return true;
-    }
-    return false;
 }
+

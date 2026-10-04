@@ -1,16 +1,10 @@
 #include "board_hal_internal.h"
 #include "driver/gpio.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "esp_log.h"
 #include <stdbool.h>
 
 #define BOARD_BUTTON_BOOT_GPIO   GPIO_NUM_0
 #define BOARD_BUTTON_EXT_GPIO    GPIO_NUM_18
-#define BUTTON_QUEUE_SIZE        16
-
-static const char *TAG = "board_button";
-static QueueHandle_t s_btn_queue = NULL;
 
 static void IRAM_ATTR button_gpio_isr_handler(void *arg)
 {
@@ -27,25 +21,17 @@ static void IRAM_ATTR button_gpio_isr_handler(void *arg)
                  : HAL_BUTTON_EVENT_SIDE_RELEASE;
     }
 
-    if (ev != HAL_BUTTON_EVENT_NONE && s_btn_queue) {
-        BaseType_t high_task_wakeup = pdFALSE;
-        xQueueSendFromISR(s_btn_queue, &ev, &high_task_wakeup);
-        if (high_task_wakeup) {
-            portYIELD_FROM_ISR();
-        }
+    if (ev != HAL_BUTTON_EVENT_NONE) {
+        hal_event_t sys_ev = {
+            .type = HAL_EVENT_BUTTON,
+            .data.button = ev,
+        };
+        hal_event_send_from_isr(&sys_ev);
     }
 }
 
 esp_err_t board_button_init(void)
 {
-    if (!s_btn_queue) {
-        s_btn_queue = xQueueCreate(BUTTON_QUEUE_SIZE, sizeof(hal_button_event_t));
-        if (!s_btn_queue) {
-            ESP_LOGE(TAG, "Failed to create button event queue");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
     gpio_config_t btn_cfg = {
         .pin_bit_mask = (1ULL << BOARD_BUTTON_BOOT_GPIO) | (1ULL << BOARD_BUTTON_EXT_GPIO),
         .mode = GPIO_MODE_INPUT,
@@ -69,13 +55,3 @@ esp_err_t board_button_init(void)
     return ESP_OK;
 }
 
-
-
-bool hal_button_wait_event(hal_button_event_t *out_event, uint32_t timeout_ms)
-{
-    if (!s_btn_queue || !out_event) {
-        return false;
-    }
-    TickType_t ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
-    return xQueueReceive(s_btn_queue, out_event, ticks) == pdTRUE;
-}

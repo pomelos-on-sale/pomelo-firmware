@@ -13,6 +13,9 @@ int lstat(const char *path, struct stat *st)
 
 esp_err_t board_hal_init(void)
 {
+    // 0. Initialize unified hardware event queue
+    hal_event_init();
+
     // 1. Initialize PMIC power management first to ensure power hold and display rail
     ESP_LOGI(TAG, "Initializing AXP2101 Power Management IC...");
     esp_err_t ret = hal_power_init();
@@ -20,6 +23,13 @@ esp_err_t board_hal_init(void)
         ESP_LOGW(TAG, "hal_power_init warning: %s", esp_err_to_name(ret));
     } else {
         ESP_LOGI(TAG, "AXP2101 PMIC successfully configured.");
+    }
+
+    // 1.5. Initialize PCF85063A hardware RTC and restore system clock
+    ESP_LOGI(TAG, "Initializing PCF85063A Real-Time Clock...");
+    ret = hal_rtc_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "hal_rtc_init warning: %s", esp_err_to_name(ret));
     }
 
     // 2. Initialize display (QSPI + DMA ping-pong buffers)
