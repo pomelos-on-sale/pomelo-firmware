@@ -6,3 +6,6 @@ rustflags = ["--cfg", "espidf_time_t_64"]
 
 [unstable]
 build-std = ["std", "panic_abort"]
+
+[net]
+git-fetch-with-cli = true
