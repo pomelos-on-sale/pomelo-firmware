@@ -169,7 +169,11 @@ esp_err_t hal_power_init(void)
     return ESP_OK;
 }
 
-int32_t hal_power_get_battery_percent(void)
+static int32_t s_smoothed_battery_percent = -1;
+static int32_t s_percent_window[3] = {-1, -1, -1};
+static uint8_t s_window_count = 0;
+
+static int32_t read_raw_battery_percent(void)
 {
     if (!s_axp2101_dev) {
         return -1;
@@ -185,6 +189,47 @@ int32_t hal_power_get_battery_percent(void)
         return (int32_t)percent;
     }
     return -1;
+}
+
+static int32_t smooth_battery_percent(int32_t raw_percent)
+{
+    if (raw_percent < 0) {
+        s_window_count = 0;
+        s_smoothed_battery_percent = -1;
+        return -1;
+    }
+
+    if (s_window_count == 0) {
+        // Cold boot: fill window with initial reading
+        s_percent_window[0] = raw_percent;
+        s_percent_window[1] = raw_percent;
+        s_percent_window[2] = raw_percent;
+        s_window_count = 3;
+        s_smoothed_battery_percent = raw_percent;
+        return raw_percent;
+    }
+
+    // Shift window and push new sample (past 2 + current 1)
+    s_percent_window[0] = s_percent_window[1];
+    s_percent_window[1] = s_percent_window[2];
+    s_percent_window[2] = raw_percent;
+
+    // Integer average with round-half-up: (sum + 1) / 3
+    int32_t sum = s_percent_window[0] + s_percent_window[1] + s_percent_window[2];
+    int32_t smoothed = (sum + 1) / 3;
+    if (smoothed > 100) smoothed = 100;
+    if (smoothed < 0) smoothed = 0;
+
+    s_smoothed_battery_percent = smoothed;
+    return smoothed;
+}
+
+int32_t hal_power_get_battery_percent(void)
+{
+    if (s_smoothed_battery_percent >= 0) {
+        return s_smoothed_battery_percent;
+    }
+    return read_raw_battery_percent();
 }
 
 bool hal_power_is_charging(void)
@@ -223,7 +268,8 @@ static void power_monitor_task(void *arg)
     uint32_t tick_count = 0;
 
     // Initial reading
-    last_percent = hal_power_get_battery_percent();
+    int32_t raw_init = read_raw_battery_percent();
+    last_percent = smooth_battery_percent(raw_init);
     last_charging = hal_power_is_charging();
 
     while (1) {
@@ -249,20 +295,26 @@ static void power_monitor_task(void *arg)
         bool charging = hal_power_is_charging();
         bool charging_changed = (charging != last_charging);
 
-        // 3. Check battery percentage (read every 10 seconds or immediately on charging change)
-        bool check_percent = (tick_count % 20 == 0) || charging_changed;
+        // 3. Check battery percentage (read every 1 second or immediately on charging change)
+        bool check_percent = (tick_count % 2 == 0) || charging_changed;
         if (check_percent) {
-            int32_t percent = hal_power_get_battery_percent();
+            int32_t raw_percent = read_raw_battery_percent();
+            int32_t percent = smooth_battery_percent(raw_percent);
             int32_t voltage = hal_power_get_battery_voltage_mv();
 
             if (percent != last_percent || charging_changed) {
                 last_percent = percent;
                 last_charging = charging;
 
+                hal_power_state_t state = HAL_POWER_STATE_BATTERY_UPDATE;
+                if (charging_changed) {
+                    state = charging ? HAL_POWER_STATE_CHARGING_STARTED : HAL_POWER_STATE_CHARGING_STOPPED;
+                }
+
                 hal_event_t ev = {
                     .type = HAL_EVENT_POWER,
                     .data.power = {
-                        .state = charging ? HAL_POWER_STATE_CHARGING_STARTED : HAL_POWER_STATE_CHARGING_STOPPED,
+                        .state = state,
                         .percent = percent,
                         .voltage_mv = voltage,
                         .is_charging = charging,

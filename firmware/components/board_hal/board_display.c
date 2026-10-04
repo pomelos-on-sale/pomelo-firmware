@@ -90,8 +90,8 @@ void hal_display_wait_vsync(void)
     }
 }
 
-#define CHUNK_LINES_DEFAULT 64
-static int s_chunk_lines = CHUNK_LINES_DEFAULT;
+#define CHUNK_STRIP_WIDTH_DEFAULT 64
+static int s_chunk_strip_width = CHUNK_STRIP_WIDTH_DEFAULT;
 static uint16_t *s_dma_chunk[2] = {NULL, NULL};
 
 // =============================================================================
@@ -156,7 +156,7 @@ esp_err_t board_display_init(void)
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Initializing Waveshare 480x480 AMOLED display at 40MHz QSPI...");
+    ESP_LOGI(TAG, "Initializing Waveshare 480x480 AMOLED display at 60MHz QSPI (high drive strength)...");
     const spi_bus_config_t buscfg = CO5300_PANEL_BUS_QSPI_CONFIG(BSP_LCD_PCLK,
                                                                  BSP_LCD_DATA0,
                                                                  BSP_LCD_DATA1,
@@ -168,6 +168,14 @@ esp_err_t board_display_init(void)
         ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    // Boost QSPI GPIO output drive capability to maximum (40mA, Cap 3) for clean 60MHz signal edges
+    gpio_set_drive_capability(BSP_LCD_PCLK, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BSP_LCD_DATA0, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BSP_LCD_DATA1, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BSP_LCD_DATA2, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BSP_LCD_DATA3, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BSP_LCD_CS, GPIO_DRIVE_CAP_3);
 
     s_trans_done_sem = xSemaphoreCreateBinary();
     s_te_sem = xSemaphoreCreateBinary();
@@ -190,7 +198,7 @@ esp_err_t board_display_init(void)
 #endif
 
     esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, s_on_color_trans_done, NULL);
-    io_config.pclk_hz = 40 * 1000 * 1000; // 40MHz QSPI clock for signal stability
+    io_config.pclk_hz = 60 * 1000 * 1000; // 60MHz high-speed QSPI clock
     io_config.trans_queue_depth = 10;
 
     co5300_vendor_config_t vendor_config = {
@@ -229,7 +237,7 @@ esp_err_t board_display_init(void)
     lcd_cmd |= 0x02 << 24;
     uint8_t param = 255;
     esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
-    ESP_LOGI(TAG, "AMOLED Display initialized at 40MHz QSPI with 100%% brightness.");
+    ESP_LOGI(TAG, "AMOLED Display initialized at 80MHz QSPI with 100%% brightness.");
 
     // Probe hardware TE signal only if mapped
 #if BSP_LCD_TE_ENABLED
@@ -247,21 +255,21 @@ esp_err_t board_display_init(void)
 #endif
     s_last_frame_start_us = esp_timer_get_time();
 
-    // Allocate 64-line Ping-Pong DMA buffers (60KB each) from internal DMA SRAM
-    size_t chunk_bytes = BOARD_DISPLAY_WIDTH * s_chunk_lines * sizeof(uint16_t);
+    // Allocate vertical strip Ping-Pong DMA buffers (480 * 64 * 2 = 60KB each) from internal DMA SRAM
+    size_t chunk_bytes = BOARD_DISPLAY_HEIGHT * s_chunk_strip_width * sizeof(uint16_t);
     s_dma_chunk[0] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     s_dma_chunk[1] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
     if (!s_dma_chunk[0] || !s_dma_chunk[1]) {
-        ESP_LOGW(TAG, "Could not allocate 64-line DMA buffers (120KB), falling back to 32 lines...");
+        ESP_LOGW(TAG, "Could not allocate 64-col DMA buffers (120KB), falling back to 32 cols...");
         if (s_dma_chunk[0]) { free(s_dma_chunk[0]); s_dma_chunk[0] = NULL; }
         if (s_dma_chunk[1]) { free(s_dma_chunk[1]); s_dma_chunk[1] = NULL; }
-        s_chunk_lines = 32;
-        chunk_bytes = BOARD_DISPLAY_WIDTH * s_chunk_lines * sizeof(uint16_t);
+        s_chunk_strip_width = 32;
+        chunk_bytes = BOARD_DISPLAY_HEIGHT * s_chunk_strip_width * sizeof(uint16_t);
         s_dma_chunk[0] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         s_dma_chunk[1] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     }
-    ESP_LOGI(TAG, "DMA ping-pong buffers initialized: %d lines (%u bytes each).", s_chunk_lines, (unsigned)chunk_bytes);
+    ESP_LOGI(TAG, "DMA ping-pong buffers initialized: %d column strips (%u bytes each).", s_chunk_strip_width, (unsigned)chunk_bytes);
 
     return ESP_OK;
 }
@@ -288,34 +296,32 @@ void hal_display_draw_bitmap(int32_t x1, int32_t y1, int32_t x2, int32_t y2, con
     if (y2 > BOARD_DISPLAY_HEIGHT) y2 = BOARD_DISPLAY_HEIGHT;
 
     const int32_t width = x2 - x1;
-    if (width <= 0) {
+    const int32_t height = y2 - y1;
+    if (width <= 0 || height <= 0) {
         return;
     }
 
-    // Auto-synchronize on the first damage rectangle of a new frame if hal_display_wait_vsync()
-    // wasn't already invoked by the presenter:
-    int64_t now_us = esp_timer_get_time();
-    if (s_last_frame_start_us == 0 || (now_us - s_last_frame_start_us) >= 8000) {
+    // Only auto-synchronize if no frame pacing timestamp was recorded at all
+    if (s_last_frame_start_us == 0) {
         hal_display_wait_vsync();
     }
 
     int buf_idx = 0;
     bool dma_pending = false;
 
-    // Addressed from the *snapped* x1, not from the caller's: snapping has to move the source
-    // with the rectangle, or a strided caller gets a one-pixel horizontal shift.
-    const uint16_t *src = pixels + (size_t)y1 * (size_t)stride + (size_t)x1;
+    // Scan direction matching physical Gate driver scan: Right to Left (x2 -> x1).
+    // Slicing vertically along X makes DMA progression parallel to the physical OLED scan,
+    // breaking the 45-degree diagonal tearing plane into a parallel beam chasing model.
+    for (int32_t x = x2; x > x1; ) {
+        int32_t cur_x1 = (x - s_chunk_strip_width >= x1) ? (x - s_chunk_strip_width) : x1;
+        int32_t cur_x2 = x;
+        int32_t strip_w = cur_x2 - cur_x1;
 
-    for (int32_t y = y1; y < y2; y += s_chunk_lines) {
-        int32_t chunk_h = (y + s_chunk_lines <= y2) ? s_chunk_lines : (y2 - y);
-
-        // Byte-swapped into the ping-pong chunk here because the panel wants big-endian RGB565,
-        // and contiguous because `esp_lcd_panel_draw_bitmap` takes a single buffer -- so a row
-        // at a time whenever the source is strided.
-        for (int32_t r = 0; r < chunk_h; ++r) {
-            const uint16_t *in = src + (size_t)r * (size_t)stride;
-            uint16_t *out = s_dma_chunk[buf_idx] + (size_t)r * (size_t)width;
-            copy_row_rgb565_be(in, out, width);
+        // Byte-swap into the ping-pong chunk buffer
+        for (int32_t r = 0; r < height; ++r) {
+            const uint16_t *in = pixels + (size_t)(y1 + r) * (size_t)stride + (size_t)cur_x1;
+            uint16_t *out = s_dma_chunk[buf_idx] + (size_t)r * (size_t)strip_w;
+            copy_row_rgb565_be(in, out, strip_w);
         }
 
         // Wait for previous DMA transaction to complete before queuing new one
@@ -325,11 +331,11 @@ void hal_display_draw_bitmap(int32_t x1, int32_t y1, int32_t x2, int32_t y2, con
         }
 
         // Send over QSPI via DMA
-        esp_lcd_panel_draw_bitmap(s_panel_handle, x1, y, x2, y + chunk_h, s_dma_chunk[buf_idx]);
+        esp_lcd_panel_draw_bitmap(s_panel_handle, cur_x1, y1, cur_x2, y2, s_dma_chunk[buf_idx]);
         dma_pending = true;
 
         buf_idx = 1 - buf_idx;
-        src += (size_t)chunk_h * (size_t)stride;
+        x = cur_x1;
     }
 
     // Wait for the final chunk's DMA transfer to finish
