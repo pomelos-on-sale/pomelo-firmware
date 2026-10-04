@@ -1,0 +1,8 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+rustflags = ["--cfg", "espidf_time_t_64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]

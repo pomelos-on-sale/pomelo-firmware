@@ -1,0 +1,20 @@
+[package]
+name = "pomelo-hal-esp32"
+version = "0.1.0"
+edition = "2021"
+description = "The ESP32-S3 (Waveshare Touch-AMOLED-2.16) implementation of the pomelo-hal board interfaces, over the `board_hal` C drivers"
+license = "GPL-3.0-only"
+# Never published: it is only meaningful next to `firmware/components/board_hal/`, whose C
+# functions it declares. The interface it implements is the published half (`pomelo-hal`).
+publish = false
+
+# A project of its own. It needs no patch table: its only dependency is the interface crate next
+# door, which depends on nothing. What it does need is a *place* to be type-checked, because it only
+# ever runs inside the firmware image — `cargo check` in this directory is that place.
+[workspace]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+pomelo-hal = { git = "https://github.com/pomelos-on-sale/pomelo-hal.git", rev = "80af97fdcbe15592b28f8fdbf2047308ad406551" }

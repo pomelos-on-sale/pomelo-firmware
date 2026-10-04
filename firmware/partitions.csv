@@ -1,0 +1,9 @@
+# ESP-IDF Partition Table
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+# The app partition has been grown to 12 MB to accommodate the Rune virtual machine,
+# bytecode compiler, and Rune-powered applications.
+# internal takes 3 MB (offset 0xC10000), leaving ample room within the 16 MB flash.
+factory,  app,  factory, 0x10000,  0xC00000,
+internal, data, spiffs,  0xC10000, 0x300000,

@@ -1,0 +1,46 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# CPU Frequency
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
+# Flash 16MB QIO
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# Octal PSRAM 8MB
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Direct all normal heap allocations (including Rust data structures) to 8MB/16MB PSRAM
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+# Strictly reserve 32KB of internal SRAM for critical DMA buffers, FreeRTOS stacks & semaphores
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# Custom Partition Table (11MB LittleFS storage)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Console over USB-Serial-JTAG for Waveshare AMOLED board
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Main task stack size (Rust runtime benefits from adequate stack: 64KB)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+
+# Completely disable Brownout Detector to prevent battery voltage ripple reset loops
+# CONFIG_ESP_BROWNOUT_DET is not set
+
+# Wi-Fi station support (used by board_wifi.c and the Wi-Fi HAL).
+# NOTE: Wi-Fi buffers are allocated from internal RAM; if boot-time allocation
+# fails on hardware, revisit CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL and the
+# CONFIG_ESP_WIFI_*_BUFFER_NUM options.
+CONFIG_ESP_WIFI_ENABLED=y

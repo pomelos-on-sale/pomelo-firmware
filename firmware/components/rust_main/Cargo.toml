@@ -1,0 +1,122 @@
+[package]
+name = "rust_main"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+# A project of its own -- *not* a member of, and not the root of, the workspace at the repository
+# root. ESP-IDF's CMake builds this staticlib by invoking cargo from this directory, and what
+# decides how it is built is this file: the patch table at the bottom is what points iced's crates
+# at the forks this board can compile, and the release profile is the one the image is built with.
+#
+# Cargo reads `[patch]` and `[profile]` **only from the root of the dependency graph**, so a crate
+# that is built as part of a larger workspace inherits that workspace's tables and cannot have its
+# own. Being a root is therefore what makes this crate's build independent of the host-side one --
+# the same crate, or the same iced, would otherwise be built with settings chosen for
+# `cargo test` on a desktop.
+[workspace]
+
+[features]
+# The recorded renderer: our own rasteriser drawing straight into the panel's RGB565 buffer,
+# in place of `tiny-skia`. In this firmware crate, the platform layer enables it unconditionally
+# (see dependencies below), so the device draws via pomelo-gfx.
+renderer = ["iced-pomelo-winit/renderer"]
+default = []
+# UI rendering diagnostics suite:
+# 1. Enables renderer phase timings (iced-pomelo-winit/profile)
+# 2. Terminal reports frame paint/flush timings and damage stats
+# 3. Screen overlays highlight borders around damaged (dirty) rectangles
+render-debug = ["iced-pomelo-winit/profile"]
+
+[dependencies]
+# The platform layer. `renderer` is on unconditionally here, and this is the right place for it: the
+# apps do not name the platform layer at all, so the *firmware* is what says "the device draws with
+# the recorded renderer". It has to be said somewhere — iced's facade asks for `iced_winit` with
+# `default-features = false`, and only the recorded renderer satisfies the `Program` bound its
+# `Application` needs.
+iced-pomelo-winit = { package = "iced_winit", path = "../../../../iced-pomelo-winit", features = [
+    "renderer",
+] }
+app-launcher = { path = "../../../../pomelo-apps/app-launcher", default-features = false }
+# The board's hardware lives next door in the firmware — the FFI declarations sit beside the C
+# they call. This crate is the composition root that injects it and translates hardware button
+# inputs (InputAction) into app launcher messages.
+pomelo-hal = { path = "../../../../pomelo-hal" }
+pomelo-hal-esp32 = { path = "../../pomelo-hal-esp32" }
+
+# =============================================================================
+# The patch table, which is why this crate is a root (see the top of this file)
+# =============================================================================
+#
+# Every entry is a copy of the repository root's, with the paths rewritten for this directory. The
+# duplication is deliberate: two independent projects need two tables, because neither root reads
+# the other's. What it must not become is a *partial* copy — cargo says nothing when a patch is
+# missing, so a crate that fell out of this list would quietly be built from crates.io, and the
+# board cannot compile that one.
+[patch.crates-io]
+# iced 0.14's embedded fork (no 64-bit atomics on Xtensa). Local sibling checkouts.
+iced_core = { path = "../../../../iced/core" }
+iced_debug = { path = "../../../../iced/debug" }
+iced_futures = { path = "../../../../iced/futures" }
+iced_graphics = { path = "../../../../iced/graphics" }
+iced_program = { path = "../../../../iced/program" }
+iced_renderer = { path = "../../../../iced/renderer" }
+iced_runtime = { path = "../../../../iced/runtime" }
+iced_tiny_skia = { path = "../../../../iced/tiny_skia" }
+iced_widget = { path = "../../../../iced/widget" }
+iced_winit = { path = "../../../../iced-pomelo-winit" }
+
+# cosmic-text 0.15's fork: fontdb/memmap made optional (esp-idf has no mmap). **The one fork that is
+# not checked out in this tree** — it is six lines of code and nobody edits it from here, so it is
+# fetched from GitHub and pinned by revision. The revision is the whole pin; a checkout would say
+# the same thing at more length. The cost is that resolving this graph wants the network once on a
+# cold cargo cache — the same price the two `pomelo-gfx` sources below already charge.
+[patch.crates-io.cosmic-text]
+git = "https://github.com/pomelos-on-sale/cosmic-text.git"
+rev = "43f1d89724436d2bf53970bd2ddbf8c05771f01f"
+
+# Upstream repositories reference dependencies over SSH (`ssh://…/pomelo-gfx.git`).
+# We patch them to local checkouts here.
+[patch."ssh://git@github.com/pomelos-on-sale/pomelo-gfx.git"]
+pomelo-gfx = { path = "../../../../pomelo-gfx" }
+
+[patch."https://github.com/pomelos-on-sale/pomelo-gfx.git"]
+pomelo-gfx = { path = "../../../../pomelo-gfx" }
+
+[patch."ssh://git@github.com/pomelos-on-sale/iced-pomelo-gfx.git"]
+iced-pomelo-gfx = { path = "../../../../iced-pomelo-gfx" }
+
+[patch."https://github.com/pomelos-on-sale/iced-pomelo-gfx.git"]
+iced-pomelo-gfx = { path = "../../../../iced-pomelo-gfx" }
+
+
+
+[patch."https://github.com/pomelos-on-sale/pomelo-hal.git"]
+pomelo-hal = { path = "../../../../pomelo-hal" }
+
+[patch."ssh://git@github.com/pomelos-on-sale/pomelo-hal.git"]
+pomelo-hal = { path = "../../../../pomelo-hal" }
+
+[patch."https://github.com/pomelos-on-sale/pomelo-widgets.git"]
+pomelo-widgets = { path = "../../../../pomelo-widgets" }
+
+[patch."ssh://git@github.com/pomelos-on-sale/pomelo-widgets.git"]
+pomelo-widgets = { path = "../../../../pomelo-widgets" }
+
+[patch."https://github.com/pomelos-on-sale/iced-pomelo-winit.git"]
+iced_winit = { path = "../../../../iced-pomelo-winit" }
+
+
+# Byte-for-byte the same numbers the image has always been built with — lifted from the repository
+# root's copy, which was itself lifted from this crate's earlier one when that root was introduced.
+# The firmware is the only published artifact, so its side of this must not drift. The cost is that
+# a host `cargo test --release` in *this* project is blocked by `panic = "abort"`; test with the
+# default dev profile, which is what the platform crate's own suite does.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
