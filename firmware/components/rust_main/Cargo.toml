@@ -36,7 +36,7 @@ render-debug = ["iced-pomelo-winit/profile"]
 # the recorded renderer". It has to be said somewhere — iced's facade asks for `iced_winit` with
 # `default-features = false`, and only the recorded renderer satisfies the `Program` bound its
 # `Application` needs.
-iced-pomelo-winit = { package = "iced_winit", path = "../../../../iced-pomelo-winit", features = [
+iced-pomelo-winit = { package = "iced_winit", path = "../../../../ui-framework/iced-pomelo-winit", features = [
     "renderer",
 ] }
 app-launcher = { path = "../../../../pomelo-apps/app-launcher", default-features = false }
@@ -57,16 +57,16 @@ pomelo-hal-esp32 = { path = "../../pomelo-hal-esp32" }
 # board cannot compile that one.
 [patch.crates-io]
 # iced 0.14's embedded fork (no 64-bit atomics on Xtensa). Local sibling checkouts.
-iced_core = { path = "../../../../iced/core" }
-iced_debug = { path = "../../../../iced/debug" }
-iced_futures = { path = "../../../../iced/futures" }
-iced_graphics = { path = "../../../../iced/graphics" }
-iced_program = { path = "../../../../iced/program" }
-iced_renderer = { path = "../../../../iced/renderer" }
-iced_runtime = { path = "../../../../iced/runtime" }
-iced_tiny_skia = { path = "../../../../iced/tiny_skia" }
-iced_widget = { path = "../../../../iced/widget" }
-iced_winit = { path = "../../../../iced-pomelo-winit" }
+iced_core = { path = "../../../../ui-framework/iced/core" }
+iced_debug = { path = "../../../../ui-framework/iced/debug" }
+iced_futures = { path = "../../../../ui-framework/iced/futures" }
+iced_graphics = { path = "../../../../ui-framework/iced/graphics" }
+iced_program = { path = "../../../../ui-framework/iced/program" }
+iced_renderer = { path = "../../../../ui-framework/iced/renderer" }
+iced_runtime = { path = "../../../../ui-framework/iced/runtime" }
+iced_tiny_skia = { path = "../../../../ui-framework/iced/tiny_skia" }
+iced_widget = { path = "../../../../ui-framework/iced/widget" }
+iced_winit = { path = "../../../../ui-framework/iced-pomelo-winit" }
 
 # cosmic-text 0.15's fork: fontdb/memmap made optional (esp-idf has no mmap). **The one fork that is
 # not checked out in this tree** — it is six lines of code and nobody edits it from here, so it is
@@ -80,16 +80,16 @@ rev = "43f1d89724436d2bf53970bd2ddbf8c05771f01f"
 # Upstream repositories reference dependencies over SSH (`ssh://…/pomelo-gfx.git`).
 # We patch them to local checkouts here.
 [patch."ssh://git@github.com/pomelos-on-sale/pomelo-gfx.git"]
-pomelo-gfx = { path = "../../../../pomelo-gfx" }
+pomelo-gfx = { path = "../../../../ui-framework/pomelo-gfx" }
 
 [patch."https://github.com/pomelos-on-sale/pomelo-gfx.git"]
-pomelo-gfx = { path = "../../../../pomelo-gfx" }
+pomelo-gfx = { path = "../../../../ui-framework/pomelo-gfx" }
 
 [patch."ssh://git@github.com/pomelos-on-sale/iced-pomelo-gfx.git"]
-iced-pomelo-gfx = { path = "../../../../iced-pomelo-gfx" }
+iced-pomelo-gfx = { path = "../../../../ui-framework/iced-pomelo-gfx" }
 
 [patch."https://github.com/pomelos-on-sale/iced-pomelo-gfx.git"]
-iced-pomelo-gfx = { path = "../../../../iced-pomelo-gfx" }
+iced-pomelo-gfx = { path = "../../../../ui-framework/iced-pomelo-gfx" }
 
 
 
@@ -106,7 +106,7 @@ pomelo-widgets = { path = "../../../../pomelo-widgets" }
 pomelo-widgets = { path = "../../../../pomelo-widgets" }
 
 [patch."https://github.com/pomelos-on-sale/iced-pomelo-winit.git"]
-iced_winit = { path = "../../../../iced-pomelo-winit" }
+iced_winit = { path = "../../../../ui-framework/iced-pomelo-winit" }
 
 
 # Byte-for-byte the same numbers the image has always been built with — lifted from the repository
