@@ -17,6 +17,15 @@
 #include "bsp/display.h"
 #include "bsp/esp32_s3_touch_amoled_2_16.h"
 
+/*
+#if __has_include("splash_logo.h")
+#include "splash_logo.h"
+#define HAS_SPLASH_LOGO 1
+#else
+#define HAS_SPLASH_LOGO 0
+#endif
+*/
+
 static const char *TAG = "board_display";
 
 static esp_lcd_panel_handle_t s_panel_handle = NULL;
@@ -34,6 +43,7 @@ static SemaphoreHandle_t s_te_sem = NULL;
 static volatile uint32_t s_te_count = 0;
 static bool s_te_active = false;
 static int64_t s_last_frame_start_us = 0;
+static bool s_display_active = false;
 
 #if BSP_LCD_TE_ENABLED
 static IRAM_ATTR void s_te_gpio_isr_handler(void *arg)
@@ -98,7 +108,7 @@ static uint16_t *s_dma_chunk[2] = {NULL, NULL};
 // CO5300 AMOLED Panel Initialization Command Sequence
 // =============================================================================
 static const co5300_lcd_init_cmd_t s_lcd_init_cmds[] = {
-    {0x11, (uint8_t[]){0x00}, 0, 600}, // Sleep out (requires 120ms+, 600ms safe delay)
+    {0x11, (uint8_t[]){0x00}, 0, 120}, // Sleep out (requires 120ms standard delay per CO5300 datasheet)
     {0xFE, (uint8_t[]){0x20}, 1, 0},   // Select vendor command page 1
     {0x19, (uint8_t[]){0x10}, 1, 0},   // Vendor setting
     {0x1C, (uint8_t[]){0xA0}, 1, 0},   // Vendor setting
@@ -107,12 +117,12 @@ static const co5300_lcd_init_cmd_t s_lcd_init_cmds[] = {
     {0x3A, (uint8_t[]){0x55}, 1, 0},   // Interface pixel format: 16-bit RGB565
     {0x35, (uint8_t[]){0x00}, 1, 0},   // Tearing effect line output
     {0x53, (uint8_t[]){0x20}, 1, 0},   // Control display (dimming / brightness control enable)
-    {0x51, (uint8_t[]){0xFF}, 1, 0},   // Display brightness (0xFF = 100%)
+    {0x51, (uint8_t[]){0x00}, 1, 0},   // Display brightness (0% initially to prevent power-on flash)
     {0x63, (uint8_t[]){0xFF}, 1, 0},   // HBM brightness setting
     {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0}, // Column address: 0 to 479 (0x01DF)
     {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0}, // Row address: 0 to 479 (0x01DF)
     {0x36, (uint8_t[]){0xA0}, 1, 0},   // Memory data access control (scan order / rotation)
-    {0x29, (uint8_t[]){0x00}, 0, 600}, // Display ON (with wait)
+    {0x28, (uint8_t[]){0x00}, 0, 0},   // Display OFF until first frame is presented
 };
 
 /**
@@ -228,16 +238,9 @@ esp_err_t board_display_init(void)
 
     esp_lcd_panel_reset(s_panel_handle);
     esp_lcd_panel_init(s_panel_handle);
-    esp_lcd_panel_disp_on_off(s_panel_handle, true);
-
-    // Set 100% brightness (CMD 0x51 with param 0xFF)
-    uint32_t lcd_cmd = 0x51;
-    lcd_cmd &= 0xff;
-    lcd_cmd <<= 8;
-    lcd_cmd |= 0x02 << 24;
-    uint8_t param = 255;
-    esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
-    ESP_LOGI(TAG, "AMOLED Display initialized at 80MHz QSPI with 100%% brightness.");
+    // Keep display blanked/off until first valid frame is written to prevent power-on green flash
+    esp_lcd_panel_disp_on_off(s_panel_handle, false);
+    ESP_LOGI(TAG, "AMOLED panel controller initialized (standby mode, blanked).");
 
     // Probe hardware TE signal only if mapped
 #if BSP_LCD_TE_ENABLED
@@ -270,6 +273,47 @@ esp_err_t board_display_init(void)
         s_dma_chunk[1] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     }
     ESP_LOGI(TAG, "DMA ping-pong buffers initialized: %d column strips (%u bytes each).", s_chunk_strip_width, (unsigned)chunk_bytes);
+
+    // Zero-clear entire GRAM to pure black (0x0000) so uninitialized memory is never visible
+    memset(s_dma_chunk[0], 0, chunk_bytes);
+    for (int32_t x = 0; x < BOARD_DISPLAY_WIDTH; x += s_chunk_strip_width) {
+        esp_lcd_panel_draw_bitmap(s_panel_handle, x, 0, x + s_chunk_strip_width, BOARD_DISPLAY_HEIGHT, s_dma_chunk[0]);
+        xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
+    }
+
+/*
+#if HAS_SPLASH_LOGO
+    // Draw centered "Pomelo UI" splash logo
+    int32_t splash_x1 = (BOARD_DISPLAY_WIDTH - SPLASH_LOGO_WIDTH) / 2;
+    int32_t splash_y1 = (BOARD_DISPLAY_HEIGHT - SPLASH_LOGO_HEIGHT) / 2;
+    int32_t splash_x2 = splash_x1 + SPLASH_LOGO_WIDTH;
+    int32_t splash_y2 = splash_y1 + SPLASH_LOGO_HEIGHT;
+
+    // CO5300 QSPI requires 2-pixel alignment
+    splash_x1 = (splash_x1 >> 1) << 1;
+    splash_y1 = (splash_y1 >> 1) << 1;
+    splash_x2 = ((splash_x2 + 1) >> 1) << 1;
+    splash_y2 = ((splash_y2 + 1) >> 1) << 1;
+
+    size_t splash_bytes = sizeof(s_splash_logo);
+    if (splash_bytes <= chunk_bytes) {
+        memcpy(s_dma_chunk[0], s_splash_logo, splash_bytes);
+        esp_lcd_panel_draw_bitmap(s_panel_handle, splash_x1, splash_y1, splash_x2, splash_y2, s_dma_chunk[0]);
+        xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
+    }
+
+    // Turn on display and full brightness seamlessly now that splash logo is in GRAM
+    esp_lcd_panel_disp_on_off(s_panel_handle, true);
+    uint32_t lcd_cmd = 0x51;
+    lcd_cmd &= 0xff;
+    lcd_cmd <<= 8;
+    lcd_cmd |= 0x02 << 24;
+    uint8_t param = 255;
+    esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+    s_display_active = true;
+    ESP_LOGI(TAG, "AMOLED display output enabled with Pomelo UI splash screen.");
+#endif
+*/
 
     return ESP_OK;
 }
@@ -342,6 +386,19 @@ void hal_display_draw_bitmap(int32_t x1, int32_t y1, int32_t x2, int32_t y2, con
     if (dma_pending) {
         xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
     }
+
+    // Turn on display and full brightness seamlessly once the first valid frame is written
+    if (!s_display_active) {
+        esp_lcd_panel_disp_on_off(s_panel_handle, true);
+        uint32_t lcd_cmd = 0x51;
+        lcd_cmd &= 0xff;
+        lcd_cmd <<= 8;
+        lcd_cmd |= 0x02 << 24;
+        uint8_t param = 255;
+        esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+        s_display_active = true;
+        ESP_LOGI(TAG, "AMOLED display output enabled on first frame.");
+    }
 }
 
 void hal_display_set_power(bool on)
@@ -349,6 +406,7 @@ void hal_display_set_power(bool on)
     if (s_panel_handle) {
         ESP_LOGI(TAG, "Setting AMOLED display power: %s", on ? "ON" : "OFF");
         esp_lcd_panel_disp_on_off(s_panel_handle, on);
+        s_display_active = on;
     }
 }
 

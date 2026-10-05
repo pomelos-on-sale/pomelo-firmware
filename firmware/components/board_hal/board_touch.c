@@ -58,6 +58,7 @@ static void touch_task(void *arg)
 
     TickType_t wait_ticks = portMAX_DELAY;
     bool currently_touched = false;
+    uint8_t release_debounce = 0;
     int32_t last_x = -1;
     int32_t last_y = -1;
 
@@ -86,6 +87,8 @@ static void touch_task(void *arg)
             if (y < 0) y = 0;
             if (y >= BOARD_DISPLAY_HEIGHT) y = BOARD_DISPLAY_HEIGHT - 1;
 
+            release_debounce = 0;
+
             portENTER_CRITICAL(&s_touch_spinlock);
             s_touch_cache.touched = true;
             s_touch_cache.x = x;
@@ -103,7 +106,9 @@ static void touch_task(void *arg)
                 if (s_touch_event_queue) {
                     xQueueSend(s_touch_event_queue, &ev, 0);
                 }
-            } else if (abs(x - last_x) > 1 || abs(y - last_y) > 1) {
+                last_x = x;
+                last_y = y;
+            } else if (abs(x - last_x) >= 1 || abs(y - last_y) >= 1) {
                 hal_touch_event_t ev = {
                     .type = HAL_TOUCH_EVENT_MOVE,
                     .x = x,
@@ -112,36 +117,46 @@ static void touch_task(void *arg)
                 if (s_touch_event_queue) {
                     xQueueSend(s_touch_event_queue, &ev, 0);
                 }
+                last_x = x;
+                last_y = y;
             }
 
             currently_touched = true;
-            last_x = x;
-            last_y = y;
             // In tracking mode, sample at 100Hz (10ms) for high-fidelity gesture tracking
             wait_ticks = pdMS_TO_TICKS(10);
         } else {
-            // Finger released
+            // Finger release with debounce filter (require 2 consecutive empty samples ~20ms
+            // to filter out CST816 transient glitch / light touch dropout during dragging)
             if (currently_touched) {
-                portENTER_CRITICAL(&s_touch_spinlock);
-                s_touch_cache.touched = false;
-                s_touch_cache.seq++;
-                portEXIT_CRITICAL(&s_touch_spinlock);
+                release_debounce++;
+                if (release_debounce >= 2) {
+                    portENTER_CRITICAL(&s_touch_spinlock);
+                    s_touch_cache.touched = false;
+                    s_touch_cache.seq++;
+                    portEXIT_CRITICAL(&s_touch_spinlock);
 
-                hal_touch_event_t ev = {
-                    .type = HAL_TOUCH_EVENT_UP,
-                    .x = last_x,
-                    .y = last_y,
-                };
-                if (s_touch_event_queue) {
-                    xQueueSend(s_touch_event_queue, &ev, 0);
+                    hal_touch_event_t ev = {
+                        .type = HAL_TOUCH_EVENT_UP,
+                        .x = last_x,
+                        .y = last_y,
+                    };
+                    if (s_touch_event_queue) {
+                        xQueueSend(s_touch_event_queue, &ev, 0);
+                    }
+
+                    currently_touched = false;
+                    release_debounce = 0;
+                    last_x = -1;
+                    last_y = -1;
+                    // Return to low-power idle: wait indefinitely for next interrupt (0% CPU)
+                    wait_ticks = portMAX_DELAY;
+                } else {
+                    // Wait one more 10ms tick to confirm genuine release
+                    wait_ticks = pdMS_TO_TICKS(10);
                 }
-
-                currently_touched = false;
-                last_x = -1;
-                last_y = -1;
+            } else {
+                wait_ticks = portMAX_DELAY;
             }
-            // Return to low-power idle: wait indefinitely for next interrupt (0% CPU)
-            wait_ticks = portMAX_DELAY;
         }
     }
 }
