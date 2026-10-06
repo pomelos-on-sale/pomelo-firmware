@@ -6,7 +6,9 @@
 //! state in its event handlers.
 
 use std::ffi::{c_char, CString};
+use std::sync::Mutex;
 
+use pomelo_hal::wifi_credentials::{self, WifiCredentials};
 use pomelo_hal::{ApInfo, HalError, ScanState, WifiBackend, WifiState, WifiStatus};
 
 mod ffi {
@@ -84,11 +86,100 @@ impl Default for EspWifi {
     }
 }
 
+/// The network the file named when this backend was initialised.
+///
+/// A `static` and not a field, because `EspWifi` is a unit struct the board builds in a `const`
+/// context, and a cache is not worth giving that up. The file is read once, in `init`, and never
+/// again: `saved` is called by whatever draws the page, and a filesystem read behind a getter is a
+/// cost nobody would see coming.
+static SAVED: Mutex<Option<WifiCredentials>> = Mutex::new(None);
+
+/// A failed filesystem call, as the HAL's error type.
+fn io_error(error: std::io::Error) -> HalError {
+    HalError::Io(error.to_string())
+}
+
 impl WifiBackend for EspWifi {
     fn init(&mut self) -> Result<(), HalError> {
-        HalError::from_code(unsafe { ffi::hal_wifi_init() })
+        // Read once, here. `Ok(None)` is a board that has never been on a network and is not worth a
+        // line; an `Err` is a file that is there and unreadable, which is a different problem from
+        // no file at all and must not be reported as one.
+        match WifiCredentials::load(wifi_credentials::BOARD_APP_DATA) {
+            Ok(saved) => {
+                if let Some(saved) = &saved {
+                    eprintln!(
+                        "[wifi] remembered {:?} (autoconnect={})",
+                        saved.ssid, saved.autoconnect
+                    );
+                }
+                *SAVED.lock().unwrap() = saved;
+            }
+            Err(error) => eprintln!("[wifi] the credentials file is unreadable: {error}"),
+        }
+
+        HalError::from_code(unsafe { ffi::hal_wifi_init() })?;
+
+        Ok(())
     }
 
+    /// What the board does, unasked, when it comes up.
+    ///
+    /// The file was read in `init`; this acts on what it said. The radio comes on only if the switch
+    /// was on, and one connection is attempted only if the file says to connect without being asked.
+    /// A board with no file does nothing at all — the radio stays down until a finger turns it on,
+    /// and the first network is chosen by hand from the page.
+    ///
+    /// Called from a thread of its own by `rust_main`, so the panel is up before the radio is.
+    fn autoconnect(&mut self) -> Result<(), HalError> {
+        let Some(saved) = self.saved() else {
+            return Ok(());
+        };
+
+        if !saved.enabled {
+            return Ok(());
+        }
+
+        self.set_enabled(true)?;
+
+        if !saved.autoconnect {
+            return Ok(());
+        }
+
+        eprintln!(
+            "[wifi] boot: connecting to {:?}, because the file says autoconnect",
+            saved.ssid
+        );
+        self.connect(&saved.ssid, &saved.password)
+    }
+
+    fn saved(&self) -> Option<WifiCredentials> {
+        SAVED.lock().unwrap().clone()
+    }
+
+    fn remember(&mut self, credentials: &WifiCredentials) -> Result<(), HalError> {
+        credentials
+            .save(wifi_credentials::BOARD_APP_DATA)
+            .map_err(io_error)?;
+
+        eprintln!("[wifi] remembered {:?}", credentials.ssid);
+        *SAVED.lock().unwrap() = Some(credentials.clone());
+        Ok(())
+    }
+
+    fn forget(&mut self) -> Result<(), HalError> {
+        WifiCredentials::forget(wifi_credentials::BOARD_APP_DATA).map_err(io_error)?;
+
+        eprintln!("[wifi] forgot the remembered network");
+        *SAVED.lock().unwrap() = None;
+        Ok(())
+    }
+
+    /// The switch, and nothing else.
+    ///
+    /// It does not connect and it does not write. Connecting here would mean the radio came up and
+    /// immediately reached for a network nobody asked for — coming up and connecting are
+    /// `autoconnect`'s job, and it is the only path to either. Writing here would put the file back
+    /// in the driver's hands, which is the thing the file exists to stop.
     fn set_enabled(&mut self, on: bool) -> Result<(), HalError> {
         HalError::from_code(unsafe { ffi::hal_wifi_set_enabled(on) })
     }
@@ -151,6 +242,11 @@ impl WifiBackend for EspWifi {
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), HalError> {
         let c_ssid = CString::new(ssid).map_err(|_| HalError::InvalidArg)?;
         let c_pwd = CString::new(password).map_err(|_| HalError::InvalidArg)?;
+
+        // Nothing is written here. The file belongs to the app: it is the app that holds the
+        // password, and it is the app that hears the connection come up, so `remember` is called
+        // from there. Writing at the *attempt* would mean a mistyped password destroys the one that
+        // worked — which is exactly what the NVS copy this replaces did.
         HalError::from_code(unsafe { ffi::hal_wifi_connect(c_ssid.as_ptr(), c_pwd.as_ptr()) })
     }
 

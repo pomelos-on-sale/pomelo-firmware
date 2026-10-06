@@ -98,10 +98,29 @@ static void on_scan_done(void)
     ESP_LOGI(TAG, "Scan complete: %u AP(s) found", (unsigned)got);
 }
 
+/// The name of the common disconnect reasons, by number.
+///
+/// By number and not by `WIFI_REASON_*`: those macros have been renamed between IDF versions, and a
+/// number is never wrong. This is a convenience over the log, not a source of truth.
+static const char *wifi_reason_name(uint8_t reason)
+{
+    switch (reason) {
+    case 1:   return "unspecified";
+    case 2:   return "auth expire";
+    case 4:   return "assoc expire";
+    case 15:  return "4-way handshake timeout";
+    case 201: return "no AP found";
+    case 202: return "auth fail";
+    case 203: return "assoc fail";
+    case 204: return "handshake timeout";
+    case 205: return "connection fail";
+    default:  return "see the IDF docs";
+    }
+}
+
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
-    (void)data;
 
     if (base == WIFI_EVENT) {
         switch (id) {
@@ -131,7 +150,14 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             s_gateway[0] = '\0';
             s_rssi = 0;
             unlock();
-            ESP_LOGI(TAG, "Wi-Fi disconnected");
+            // The reason is the whole diagnosis, and it was being thrown away. 15 and 204 are a failed
+            // four-way handshake — the password did not work; 201 is a network that is no longer
+            // there; 2 and 202 are the AP refusing the authentication outright. Without it, one
+            // disconnect reads exactly like another: wrong password and out of range are the same
+            // line — and the app's own `[wifi]` lines cannot tell them apart either.
+            ESP_LOGW(TAG, "Wi-Fi disconnected: reason %u (%s)",
+                     (unsigned)((wifi_event_sta_disconnected_t *)data)->reason,
+                     wifi_reason_name(((wifi_event_sta_disconnected_t *)data)->reason));
             {
                 hal_event_t ev = {
                     .type = HAL_EVENT_WIFI,
@@ -341,7 +367,28 @@ esp_err_t hal_wifi_connect(const char *ssid, const char *password)
     if (password) {
         strncpy((char *)wc.sta.password, password, sizeof(wc.sta.password) - 1);
     }
-    wc.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept any encryption mode
+
+    // The threshold is not one number for both cases, and with a password `WIFI_AUTH_OPEN` is a trap.
+    //
+    // `libnet80211` raises `OPEN` to `WPA2_PSK` by itself when the password is long enough for WPA2
+    // — it logs "Password length matches WPA2 standards, authmode threshold changes from OPEN to
+    // WPA2" — and an access point that advertises `WPA_PSK` is then below the threshold and gets
+    // filtered out *before* association. The connection fails with reason 211,
+    // `NO_AP_FOUND_IN_AUTHMODE_THRESHOLD`, and the password is never offered to anybody: the log
+    // blames the network for a password that never left the board.
+    //
+    // `WPA_PSK` is the floor that means "encrypted": WPA, WPA2, the mixed mode and WPA3 all compare
+    // above it. Without a password the floor has to stay `OPEN`, or an open network would be filtered
+    // out by our own threshold.
+    wc.sta.threshold.authmode = wc.sta.password[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+
+    // The credentials are the app's now, and this is the line that makes that true rather than a
+    // second copy. `WIFI_STORAGE_FLASH` is IDF's default -- board_wifi.c never chose it -- so
+    // without this, every attempt writes the SSID and password into `nvs.net80211` whether it
+    // works or not, and the driver's opinion of which network this board belongs to sits in flash
+    // beside the app's file with nothing to reconcile them. The app writes
+    // /internal/AppData/WIFI/wifi.conf instead; see `pomelo-hal`'s `wifi_credentials`.
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
     lock();
     s_conn_state = HAL_WIFI_STATE_CONNECTING;
