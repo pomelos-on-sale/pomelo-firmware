@@ -257,7 +257,7 @@ esp_err_t hal_audio_set_volume(uint8_t volume);
 esp_err_t hal_audio_close(void);
 
 /* ---------------------------------------------------------------------------
- * PCF85063A Real-Time Clock (RTC).
+ * PCF85063A Real-Time Clock (RTC) and SNTP Network Time.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -265,6 +265,19 @@ esp_err_t hal_audio_close(void);
  */
 esp_err_t hal_rtc_init(void);
 
+/**
+ * @brief Synchronize system time with an SNTP server (blocking wait up to timeout_ms).
+ *
+ * @param server Optional NTP server hostname (e.g. "pool.ntp.org"), or NULL for default.
+ * @param timeout_ms Maximum time in milliseconds to wait for synchronization.
+ * @return ESP_OK if synchronized, ESP_ERR_TIMEOUT on timeout, or error code.
+ */
+esp_err_t hal_sntp_sync(const char *server, uint32_t timeout_ms);
+
+/**
+ * @brief Returns true if system time has been synchronized with SNTP.
+ */
+bool hal_sntp_is_synced(void);
 
 #ifdef __cplusplus
 }

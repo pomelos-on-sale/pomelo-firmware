@@ -35,12 +35,13 @@
 //! difference: `components/` = built by IDF, `firmware/<crate>/` = built by cargo.
 
 mod audio;
+mod event;
 mod imu;
 mod input;
 mod mic;
 mod power;
+mod time;
 mod wifi;
-mod event;
 
 use std::sync::Arc;
 
@@ -51,6 +52,7 @@ pub use imu::EspImu;
 pub use input::EspInput;
 pub use mic::EspMic;
 pub use power::EspPower;
+pub use time::EspTime;
 pub use wifi::EspWifi;
 
 /// Assemble this board's backends into the shared handle the apps take.
@@ -66,6 +68,7 @@ pub fn board() -> Arc<Board> {
         Box::new(mic::EspMic::new()),
         Box::new(imu::EspImu::new()),
         Box::new(input::EspInput::new()),
+        Box::new(time::EspTime::new()),
     ));
     event::start_event_pump(Arc::clone(&board));
     board

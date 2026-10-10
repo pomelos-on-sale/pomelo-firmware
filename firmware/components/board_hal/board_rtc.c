@@ -4,8 +4,11 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 #include <sys/time.h>
 #include <time.h>
+#include <string.h>
 
 static const char *TAG = "board_rtc";
 
@@ -196,3 +199,57 @@ esp_err_t hal_rtc_init(void)
 
     return ESP_OK;
 }
+
+static bool s_sntp_initialized = false;
+static bool s_sntp_synced = false;
+
+static void sntp_sync_notification_cb(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "SNTP time sync event notification: epoch %lld", (long long)tv->tv_sec);
+    s_sntp_synced = true;
+}
+
+esp_err_t hal_sntp_sync(const char *server, uint32_t timeout_ms)
+{
+    const char *ntp_host = (server && strlen(server) > 0) ? server : "pool.ntp.org";
+
+    if (!s_sntp_initialized) {
+        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(ntp_host);
+        config.sync_cb = sntp_sync_notification_cb;
+        esp_err_t err = esp_netif_sntp_init(&config);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to init SNTP: %s", esp_err_to_name(err));
+            return err;
+        }
+        s_sntp_initialized = true;
+    } else if (server && strlen(server) > 0) {
+        esp_sntp_setservername(0, ntp_host);
+        esp_sntp_restart();
+    }
+
+    ESP_LOGI(TAG, "Waiting for SNTP sync with %s (timeout %lu ms)...", ntp_host, (unsigned long)timeout_ms);
+    esp_err_t err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
+    if (err == ESP_OK) {
+        s_sntp_synced = true;
+        time_t now = 0;
+        time(&now);
+        ESP_LOGI(TAG, "SNTP sync completed successfully. System epoch: %lld", (long long)now);
+        return ESP_OK;
+    } else {
+        ESP_LOGW(TAG, "SNTP sync wait timed out or failed: %s", esp_err_to_name(err));
+        return err;
+    }
+}
+
+bool hal_sntp_is_synced(void)
+{
+    if (s_sntp_synced) {
+        return true;
+    }
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+        s_sntp_synced = true;
+        return true;
+    }
+    return false;
+}
+
