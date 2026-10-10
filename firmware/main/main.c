@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <reent.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include "esp_log.h"
 #include "esp_littlefs.h"
 #include "freertos/FreeRTOS.h"
@@ -84,19 +86,6 @@ static void fs_init(void)
 
     esp_littlefs_info(conf.partition_label, &total, &used);
     ESP_LOGI(TAG, "LittleFS mounted at /internal: total=%u, used=%u bytes", (unsigned)total, (unsigned)used);
-
-    // If internal is fresh, create a sample welcome.txt file
-    FILE *f = fopen("/internal/welcome.txt", "r");
-    if (!f) {
-        f = fopen("/internal/welcome.txt", "w");
-        if (f) {
-            fprintf(f, "Welcome to ESP32 Rust UI System on ESP32-S3 AMOLED!\nInternal LittleFS mounted successfully.\n");
-            fclose(f);
-            ESP_LOGI(TAG, "Created initial /internal/welcome.txt");
-        }
-    } else {
-        fclose(f);
-    }
 }
 
 void app_main(void)

@@ -196,11 +196,28 @@ impl AudioBackend for EspAudio {
                             break;
                         }
                         Ok(n) => {
-                            let ret = unsafe { ffi::hal_audio_write(buf.as_ptr(), n as u32) };
-                            if ret != 0 {
-                                std::thread::sleep(std::time::Duration::from_millis(2));
-                            } else {
-                                control_clone.bytes_played.fetch_add(n as u32, Ordering::Relaxed);
+                            let mut written = 0;
+                            while written < n {
+                                if control_clone.stop_requested.load(Ordering::Relaxed) {
+                                    break;
+                                }
+                                if control_clone.is_paused.load(Ordering::Relaxed) {
+                                    std::thread::sleep(std::time::Duration::from_millis(15));
+                                    continue;
+                                }
+                                let to_write = (n - written) as u32;
+                                let ret = unsafe {
+                                    ffi::hal_audio_write(buf[written..].as_ptr(), to_write)
+                                };
+                                if ret != 0 {
+                                    std::thread::sleep(std::time::Duration::from_millis(2));
+                                } else {
+                                    control_clone.bytes_played.fetch_add(to_write, Ordering::Relaxed);
+                                    written += to_write as usize;
+                                }
+                            }
+                            if control_clone.stop_requested.load(Ordering::Relaxed) {
+                                break;
                             }
                         }
                         Err(_) => break,

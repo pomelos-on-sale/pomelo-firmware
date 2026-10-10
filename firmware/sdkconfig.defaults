@@ -44,3 +44,6 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
 # fails on hardware, revisit CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL and the
 # CONFIG_ESP_WIFI_*_BUFFER_NUM options.
 CONFIG_ESP_WIFI_ENABLED=y
+
+# LittleFS SPIFFS compatibility (auto-create parent directories on file open)
+CONFIG_LITTLEFS_SPIFFS_COMPAT=y

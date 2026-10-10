@@ -108,8 +108,13 @@ impl WifiBackend for EspWifi {
             Ok(saved) => {
                 if let Some(saved) = &saved {
                     eprintln!(
-                        "[wifi] remembered {:?} (autoconnect={})",
-                        saved.ssid, saved.autoconnect
+                        "[wifi] init: loaded credentials from storage: enabled={}, ssid={:?}, autoconnect={}",
+                        saved.enabled, saved.ssid, saved.autoconnect
+                    );
+                } else {
+                    eprintln!(
+                        "[wifi] init: no credentials file found at {}",
+                        wifi_credentials::path(wifi_credentials::BOARD_APP_DATA).display()
                     );
                 }
                 *SAVED.lock().unwrap() = saved;
@@ -132,21 +137,25 @@ impl WifiBackend for EspWifi {
     /// Called from a thread of its own by `rust_main`, so the panel is up before the radio is.
     fn autoconnect(&mut self) -> Result<(), HalError> {
         let Some(saved) = self.saved() else {
+            eprintln!("[wifi] autoconnect: no saved config, radio stays off");
             return Ok(());
         };
 
         if !saved.enabled {
+            eprintln!("[wifi] autoconnect: radio switch is OFF, keeping radio off");
             return Ok(());
         }
 
+        eprintln!("[wifi] autoconnect: radio switch is ON, enabling radio");
         self.set_enabled(true)?;
 
-        if !saved.autoconnect {
+        if !saved.has_network() || !saved.autoconnect {
+            eprintln!("[wifi] autoconnect: no network to connect or autoconnect=false");
             return Ok(());
         }
 
         eprintln!(
-            "[wifi] boot: connecting to {:?}, because the file says autoconnect",
+            "[wifi] autoconnect: connecting to {:?}, because the file says autoconnect",
             saved.ssid
         );
         self.connect(&saved.ssid, &saved.password)
@@ -157,11 +166,20 @@ impl WifiBackend for EspWifi {
     }
 
     fn remember(&mut self, credentials: &WifiCredentials) -> Result<(), HalError> {
+        eprintln!(
+            "[wifi] writing credentials to {}: enabled={}, ssid={:?}",
+            wifi_credentials::path(wifi_credentials::BOARD_APP_DATA).display(),
+            credentials.enabled,
+            credentials.ssid
+        );
         credentials
             .save(wifi_credentials::BOARD_APP_DATA)
             .map_err(io_error)?;
 
-        eprintln!("[wifi] remembered {:?}", credentials.ssid);
+        eprintln!(
+            "[wifi] successfully remembered (enabled={}, ssid={:?})",
+            credentials.enabled, credentials.ssid
+        );
         *SAVED.lock().unwrap() = Some(credentials.clone());
         Ok(())
     }

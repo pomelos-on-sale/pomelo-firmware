@@ -17,14 +17,7 @@
 #include "bsp/display.h"
 #include "bsp/esp32_s3_touch_amoled_2_16.h"
 
-/*
-#if __has_include("splash_logo.h")
-#include "splash_logo.h"
-#define HAS_SPLASH_LOGO 1
-#else
-#define HAS_SPLASH_LOGO 0
-#endif
-*/
+
 
 static const char *TAG = "board_display";
 
@@ -281,39 +274,7 @@ esp_err_t board_display_init(void)
         xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
     }
 
-/*
-#if HAS_SPLASH_LOGO
-    // Draw centered "Pomelo UI" splash logo
-    int32_t splash_x1 = (BOARD_DISPLAY_WIDTH - SPLASH_LOGO_WIDTH) / 2;
-    int32_t splash_y1 = (BOARD_DISPLAY_HEIGHT - SPLASH_LOGO_HEIGHT) / 2;
-    int32_t splash_x2 = splash_x1 + SPLASH_LOGO_WIDTH;
-    int32_t splash_y2 = splash_y1 + SPLASH_LOGO_HEIGHT;
 
-    // CO5300 QSPI requires 2-pixel alignment
-    splash_x1 = (splash_x1 >> 1) << 1;
-    splash_y1 = (splash_y1 >> 1) << 1;
-    splash_x2 = ((splash_x2 + 1) >> 1) << 1;
-    splash_y2 = ((splash_y2 + 1) >> 1) << 1;
-
-    size_t splash_bytes = sizeof(s_splash_logo);
-    if (splash_bytes <= chunk_bytes) {
-        memcpy(s_dma_chunk[0], s_splash_logo, splash_bytes);
-        esp_lcd_panel_draw_bitmap(s_panel_handle, splash_x1, splash_y1, splash_x2, splash_y2, s_dma_chunk[0]);
-        xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
-    }
-
-    // Turn on display and full brightness seamlessly now that splash logo is in GRAM
-    esp_lcd_panel_disp_on_off(s_panel_handle, true);
-    uint32_t lcd_cmd = 0x51;
-    lcd_cmd &= 0xff;
-    lcd_cmd <<= 8;
-    lcd_cmd |= 0x02 << 24;
-    uint8_t param = 255;
-    esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
-    s_display_active = true;
-    ESP_LOGI(TAG, "AMOLED display output enabled with Pomelo UI splash screen.");
-#endif
-*/
 
     return ESP_OK;
 }
