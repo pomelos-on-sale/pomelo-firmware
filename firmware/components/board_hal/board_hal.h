@@ -42,6 +42,11 @@ void hal_display_wait_vsync(void);
 void hal_display_set_power(bool on);
 
 /**
+ * @brief Check whether display panel is currently active / powered on.
+ */
+bool hal_display_is_active(void);
+
+/**
  * @brief Poll touch point. Returns true if touched, false if released.
  */
 bool hal_touch_get_point(int32_t *out_x, int32_t *out_y);

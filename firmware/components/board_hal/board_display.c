@@ -367,7 +367,20 @@ void hal_display_set_power(bool on)
     if (s_panel_handle) {
         ESP_LOGI(TAG, "Setting AMOLED display power: %s", on ? "ON" : "OFF");
         esp_lcd_panel_disp_on_off(s_panel_handle, on);
+        if (on && s_io_handle) {
+            uint32_t lcd_cmd = 0x51;
+            lcd_cmd &= 0xff;
+            lcd_cmd <<= 8;
+            lcd_cmd |= 0x02 << 24;
+            uint8_t param = 255;
+            esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+        }
         s_display_active = on;
     }
+}
+
+bool hal_display_is_active(void)
+{
+    return s_display_active;
 }
 

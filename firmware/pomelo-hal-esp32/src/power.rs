@@ -62,4 +62,21 @@ impl PowerBackend for EspPower {
             Ok(raw as u32)
         }
     }
+
+    #[inline]
+    fn set_display_power(&mut self, on: bool) -> Result<(), HalError> {
+        extern "C" {
+            fn hal_display_set_power(on: bool);
+        }
+        unsafe { hal_display_set_power(on) };
+        Ok(())
+    }
+
+    #[inline]
+    fn is_display_on(&self) -> Result<bool, HalError> {
+        extern "C" {
+            fn hal_display_is_active() -> bool;
+        }
+        Ok(unsafe { hal_display_is_active() })
+    }
 }
