@@ -40,6 +40,7 @@ mod imu;
 mod input;
 mod mic;
 mod power;
+mod storage;
 mod time;
 mod wifi;
 
@@ -52,6 +53,7 @@ pub use imu::EspImu;
 pub use input::EspInput;
 pub use mic::EspMic;
 pub use power::EspPower;
+pub use storage::EspStorage;
 pub use time::EspTime;
 pub use wifi::EspWifi;
 
@@ -69,6 +71,7 @@ pub fn board() -> Arc<Board> {
         Box::new(imu::EspImu::new()),
         Box::new(input::EspInput::new()),
         Box::new(time::EspTime::new()),
+        Box::new(storage::EspStorage::new()),
     ));
     event::start_event_pump(Arc::clone(&board));
     board

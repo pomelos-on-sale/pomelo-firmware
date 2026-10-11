@@ -97,6 +97,7 @@ typedef enum {
     HAL_EVENT_BUTTON,
     HAL_EVENT_POWER,
     HAL_EVENT_WIFI,
+    HAL_EVENT_SD,
 } hal_event_type_t;
 
 typedef enum {
@@ -131,6 +132,7 @@ typedef struct {
         hal_button_event_t button;
         hal_power_event_t  power;
         hal_wifi_event_t   wifi;
+        int32_t            sd;
     } data;
 } hal_event_t;
 
@@ -283,6 +285,72 @@ esp_err_t hal_sntp_sync(const char *server, uint32_t timeout_ms);
  * @brief Returns true if system time has been synchronized with SNTP.
  */
 bool hal_sntp_is_synced(void);
+
+/* ---------------------------------------------------------------------------
+ * Storage Subsystem (MicroSD / TF Card via SDMMC/SPI)
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+    HAL_SD_STATUS_NOT_INSERTED = 0,
+    HAL_SD_STATUS_UNFORMATTED  = 1,
+    HAL_SD_STATUS_MOUNTED      = 2,
+    HAL_SD_STATUS_ERROR        = 3,
+} hal_sd_status_t;
+
+typedef struct {
+    char     name[16];          /**< Card model/name from CID (e.g. "SL64G") */
+    uint64_t total_bytes;       /**< Physical hardware capacity in bytes */
+    uint32_t serial_number;     /**< Card hardware serial number */
+    bool     is_formatted;      /**< True if filesystem mounted successfully */
+} hal_sd_card_info_t;
+
+/**
+ * @brief Attempt to probe and mount the SD card at /sdcard.
+ *
+ * @return ESP_OK on success, or error code.
+ */
+esp_err_t hal_storage_sd_mount(void);
+
+/**
+ * @brief Unmount the SD card from /sdcard.
+ *
+ * @return ESP_OK on success, or error code.
+ */
+esp_err_t hal_storage_sd_unmount(void);
+
+/**
+ * @brief Query current SD card status.
+ */
+hal_sd_status_t hal_storage_sd_get_status(void);
+
+/**
+ * @brief Query hardware identity and metadata of the SD card.
+ *
+ * @param out_info Pointer to receive SD card info structure.
+ * @return ESP_OK on success, ESP_ERR_NOT_FOUND if card is not present.
+ */
+esp_err_t hal_storage_sd_get_info(hal_sd_card_info_t *out_info);
+
+/**
+ * @brief Format the SD card with a FAT32 filesystem and mount it.
+ *
+ * @return ESP_OK on success, or error code.
+ */
+esp_err_t hal_storage_sd_format(void);
+
+/**
+ * @brief Initialize background SD card monitor and auto-detection task.
+ */
+esp_err_t hal_storage_sd_init(void);
+
+/**
+ * @brief Get SD card capacity and free space in bytes.
+ *
+ * @param out_total_bytes Pointer to receive total capacity in bytes (can be NULL).
+ * @param out_free_bytes Pointer to receive free space in bytes (can be NULL).
+ * @return ESP_OK if successfully retrieved, ESP_ERR_INVALID_STATE if not mounted.
+ */
+esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free_bytes);
 
 #ifdef __cplusplus
 }

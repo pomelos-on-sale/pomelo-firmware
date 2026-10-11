@@ -113,7 +113,7 @@ void app_main(void)
     ESP_LOGI(TAG, "  Initializing AMOLED & Touch Hardware...");
     ESP_LOGI(TAG, "===============================================");
 
-    // Initialize display, touch, and PMIC hardware
+    // Initialize display, touch, PMIC hardware, and SD card background monitor
     esp_err_t err = board_hal_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "board_hal_init failed: %d", err);

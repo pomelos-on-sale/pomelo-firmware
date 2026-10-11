@@ -15,6 +15,7 @@ pub enum HalEventType {
     Button,
     Power,
     Wifi,
+    Sd,
 }
 
 #[repr(C)]
@@ -59,6 +60,7 @@ pub union HalEventData {
     pub button: HalButtonEvent,
     pub power: HalPowerEvent,
     pub wifi: HalWifiEvent,
+    pub sd: i32,
 }
 
 #[repr(C)]
@@ -132,6 +134,10 @@ impl HalEvent {
             HalEventType::Wifi => {
                 let status = board.wifi().status();
                 Some(SystemEvent::WifiStatusChanged(status))
+            }
+            HalEventType::Sd => {
+                let status = board.storage().sd_status();
+                Some(SystemEvent::SdCardChanged(status))
             }
             HalEventType::None => None,
         }

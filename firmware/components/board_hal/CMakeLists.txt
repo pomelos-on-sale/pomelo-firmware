@@ -23,6 +23,7 @@ idf_component_register(
         "board_audio.c"
         "board_wifi.c"
         "board_rtc.c"
+        "board_storage.c"
     INCLUDE_DIRS "."
     WHOLE_ARCHIVE
     REQUIRES
@@ -34,6 +35,8 @@ idf_component_register(
         esp_lcd_touch
         driver
         vfs
+        fatfs
+        sdmmc
         esp_wifi
         esp_netif
         esp_event

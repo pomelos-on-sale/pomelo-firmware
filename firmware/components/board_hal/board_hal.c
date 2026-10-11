@@ -51,5 +51,11 @@ esp_err_t board_hal_init(void)
         ESP_LOGW(TAG, "board_button_init warning: %s", esp_err_to_name(ret));
     }
 
+    // 5. Initialize background SD card auto-detection and monitor on Core 0
+    ret = hal_storage_sd_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "hal_storage_sd_init warning: %s", esp_err_to_name(ret));
+    }
+
     return ESP_OK;
 }
