@@ -384,3 +384,17 @@ bool hal_display_is_active(void)
     return s_display_active;
 }
 
+static uint32_t s_sleep_timeout_ms = 0;
+
+void hal_display_set_sleep_timeout_ms(uint32_t timeout_ms)
+{
+    ESP_LOGI(TAG, "Setting AMOLED auto-sleep timeout: %lu ms (%s)",
+             (unsigned long)timeout_ms, timeout_ms == 0 ? "Never" : "Enabled");
+    s_sleep_timeout_ms = timeout_ms;
+}
+
+uint32_t hal_display_get_sleep_timeout_ms(void)
+{
+    return s_sleep_timeout_ms;
+}
+

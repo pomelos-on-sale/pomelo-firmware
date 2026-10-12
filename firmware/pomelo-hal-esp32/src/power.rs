@@ -79,4 +79,29 @@ impl PowerBackend for EspPower {
         }
         Ok(unsafe { hal_display_is_active() })
     }
+
+    #[inline]
+    fn set_sleep_timeout(&mut self, timeout: Option<std::time::Duration>) -> Result<(), HalError> {
+        extern "C" {
+            fn hal_display_set_sleep_timeout_ms(timeout_ms: u32);
+        }
+        let ms = timeout
+            .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
+            .unwrap_or(0);
+        unsafe { hal_display_set_sleep_timeout_ms(ms) };
+        Ok(())
+    }
+
+    #[inline]
+    fn sleep_timeout(&self) -> Result<Option<std::time::Duration>, HalError> {
+        extern "C" {
+            fn hal_display_get_sleep_timeout_ms() -> u32;
+        }
+        let ms = unsafe { hal_display_get_sleep_timeout_ms() };
+        if ms == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(std::time::Duration::from_millis(ms as u64)))
+        }
+    }
 }

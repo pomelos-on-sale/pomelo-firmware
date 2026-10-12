@@ -47,6 +47,16 @@ void hal_display_set_power(bool on);
 bool hal_display_is_active(void);
 
 /**
+ * @brief Set auto-sleep inactivity timeout in milliseconds. 0 disables auto-sleep.
+ */
+void hal_display_set_sleep_timeout_ms(uint32_t timeout_ms);
+
+/**
+ * @brief Get auto-sleep inactivity timeout in milliseconds. 0 means disabled.
+ */
+uint32_t hal_display_get_sleep_timeout_ms(void);
+
+/**
  * @brief Poll touch point. Returns true if touched, false if released.
  */
 bool hal_touch_get_point(int32_t *out_x, int32_t *out_y);
