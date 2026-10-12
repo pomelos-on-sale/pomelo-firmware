@@ -98,6 +98,7 @@ typedef enum {
     HAL_EVENT_POWER,
     HAL_EVENT_WIFI,
     HAL_EVENT_SD,
+    HAL_EVENT_HTTP,
 } hal_event_type_t;
 
 typedef enum {
@@ -127,12 +128,19 @@ typedef struct {
 } hal_wifi_event_t;
 
 typedef struct {
+    int32_t status_code;
+    size_t  bytes;
+    int32_t error_code;
+} hal_http_event_t;
+
+typedef struct {
     hal_event_type_t type;
     union {
         hal_button_event_t button;
         hal_power_event_t  power;
         hal_wifi_event_t   wifi;
         int32_t            sd;
+        hal_http_event_t   http;
     } data;
 } hal_event_t;
 
@@ -351,6 +359,63 @@ esp_err_t hal_storage_sd_init(void);
  * @return ESP_OK if successfully retrieved, ESP_ERR_INVALID_STATE if not mounted.
  */
 esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free_bytes);
+
+/* ---------------------------------------------------------------------------
+ * HTTP / HTTPS Client Subsystem
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+    HAL_HTTP_STATE_IDLE    = 0,
+    HAL_HTTP_STATE_RUNNING = 1,
+    HAL_HTTP_STATE_DONE    = 2,
+    HAL_HTTP_STATE_ERROR   = 3,
+} hal_http_state_t;
+
+typedef struct {
+    hal_http_state_t state;
+    size_t           downloaded_bytes;
+    size_t           total_bytes;     /* 0 if chunked or unknown */
+    int              status_code;     /* HTTP status code, e.g. 200 */
+    int              error_code;      /* esp_err_t or network error */
+} hal_http_status_snapshot_t;
+
+/**
+ * @brief Initialize HTTP subsystem (allocates queues / mutexes and Core 0 worker task).
+ */
+esp_err_t hal_http_init(void);
+
+/**
+ * @brief Start an asynchronous HTTP/HTTPS GET request in the background task.
+ *
+ * @param url Full URL string (http:// or https://)
+ * @return ESP_OK if request queued, ESP_ERR_INVALID_STATE if already running,
+ *         ESP_ERR_INVALID_ARG if url is invalid.
+ */
+esp_err_t hal_http_start(const char *url);
+
+/**
+ * @brief Get current snapshot of HTTP client state. Non-blocking.
+ */
+hal_http_status_snapshot_t hal_http_get_status(void);
+
+/**
+ * @brief Get the size of the downloaded response data in bytes when state is DONE.
+ */
+size_t hal_http_get_result_size(void);
+
+/**
+ * @brief Copy out completed response data into buffer and reset state to IDLE.
+ *
+ * @param out_buf Destination buffer
+ * @param max_len Maximum bytes to copy
+ * @return Number of bytes copied on success, or negative error code.
+ */
+int hal_http_take_result(uint8_t *out_buf, size_t max_len);
+
+/**
+ * @brief Cancel an active HTTP request and reset state to IDLE.
+ */
+void hal_http_cancel(void);
 
 #ifdef __cplusplus
 }

@@ -16,6 +16,7 @@ pub enum HalEventType {
     Power,
     Wifi,
     Sd,
+    Http,
 }
 
 #[repr(C)]
@@ -55,12 +56,21 @@ pub struct HalWifiEvent {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct HalHttpEvent {
+    pub status_code: i32,
+    pub bytes: usize,
+    pub error_code: i32,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub union HalEventData {
     pub button: HalButtonEvent,
     pub power: HalPowerEvent,
     pub wifi: HalWifiEvent,
     pub sd: i32,
+    pub http: HalHttpEvent,
 }
 
 #[repr(C)]
@@ -138,6 +148,14 @@ impl HalEvent {
             HalEventType::Sd => {
                 let status = board.storage().sd_status();
                 Some(SystemEvent::SdCardChanged(status))
+            }
+            HalEventType::Http => {
+                let http = unsafe { self.data.http };
+                Some(SystemEvent::HttpFinished {
+                    status_code: if http.status_code > 0 { http.status_code as u16 } else { 0 },
+                    bytes: http.bytes,
+                    error_code: if http.error_code != 0 { Some(http.error_code) } else { None },
+                })
             }
             HalEventType::None => None,
         }

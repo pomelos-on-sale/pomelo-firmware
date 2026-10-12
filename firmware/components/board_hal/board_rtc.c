@@ -203,6 +203,10 @@ esp_err_t hal_rtc_init(void)
 static bool s_sntp_initialized = false;
 static bool s_sntp_synced = false;
 
+/// Unix epoch timestamp for 2026-01-01 00:00:00 UTC.
+/// If system POSIX clock is >= this threshold, the clock is considered valid for TLS and HTTPS.
+#define VALID_TIME_EPOCH_2026 1767225600LL
+
 static void sntp_sync_notification_cb(struct timeval *tv)
 {
     ESP_LOGI(TAG, "SNTP time sync event notification: epoch %lld", (long long)tv->tv_sec);
@@ -211,23 +215,35 @@ static void sntp_sync_notification_cb(struct timeval *tv)
 
 esp_err_t hal_sntp_sync(const char *server, uint32_t timeout_ms)
 {
-    const char *ntp_host = (server && strlen(server) > 0) ? server : "pool.ntp.org";
-
     if (!s_sntp_initialized) {
-        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(ntp_host);
-        config.sync_cb = sntp_sync_notification_cb;
-        esp_err_t err = esp_netif_sntp_init(&config);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGE(TAG, "Failed to init SNTP: %s", esp_err_to_name(err));
-            return err;
+        if (server && strlen(server) > 0) {
+            esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(server);
+            config.sync_cb = sntp_sync_notification_cb;
+            esp_err_t err = esp_netif_sntp_init(&config);
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGE(TAG, "Failed to init SNTP: %s", esp_err_to_name(err));
+                return err;
+            }
+        } else {
+            esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+                3,
+                ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "ntp.tencent.com", "pool.ntp.org")
+            );
+            config.sync_cb = sntp_sync_notification_cb;
+            esp_err_t err = esp_netif_sntp_init(&config);
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGE(TAG, "Failed to init SNTP: %s", esp_err_to_name(err));
+                return err;
+            }
         }
         s_sntp_initialized = true;
     } else if (server && strlen(server) > 0) {
-        esp_sntp_setservername(0, ntp_host);
+        esp_sntp_setservername(0, server);
         esp_sntp_restart();
     }
 
-    ESP_LOGI(TAG, "Waiting for SNTP sync with %s (timeout %lu ms)...", ntp_host, (unsigned long)timeout_ms);
+    const char *display_host = (server && strlen(server) > 0) ? server : "ntp.aliyun.com / ntp.tencent.com / pool.ntp.org";
+    ESP_LOGI(TAG, "Waiting for SNTP sync with %s (timeout %lu ms)...", display_host, (unsigned long)timeout_ms);
     esp_err_t err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
     if (err == ESP_OK) {
         s_sntp_synced = true;
@@ -243,6 +259,14 @@ esp_err_t hal_sntp_sync(const char *server, uint32_t timeout_ms)
 
 bool hal_sntp_is_synced(void)
 {
+    // 1. If system POSIX clock is already >= 2026-01-01 (restored from RTC or synced), time is valid!
+    time_t now = 0;
+    time(&now);
+    if (now >= VALID_TIME_EPOCH_2026) {
+        return true;
+    }
+
+    // 2. If SNTP callback or status indicates sync completed
     if (s_sntp_synced) {
         return true;
     }

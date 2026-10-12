@@ -24,6 +24,7 @@ idf_component_register(
         "board_wifi.c"
         "board_rtc.c"
         "board_storage.c"
+        "board_http.c"
     INCLUDE_DIRS "."
     WHOLE_ARCHIVE
     REQUIRES
@@ -43,6 +44,8 @@ idf_component_register(
         nvs_flash
         esp_timer
         esp_rom
+        esp_http_client
+        mbedtls
 )
 
 # Intercept POSIX settimeofday and clock_settime so they automatically persist to hardware RTC

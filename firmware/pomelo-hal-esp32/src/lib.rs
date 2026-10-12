@@ -36,6 +36,7 @@
 
 mod audio;
 mod event;
+mod http;
 mod imu;
 mod input;
 mod mic;
@@ -49,6 +50,7 @@ use std::sync::Arc;
 use pomelo_hal::Board;
 
 pub use audio::EspAudio;
+pub use http::EspHttp;
 pub use imu::EspImu;
 pub use input::EspInput;
 pub use mic::EspMic;
@@ -72,6 +74,7 @@ pub fn board() -> Arc<Board> {
         Box::new(input::EspInput::new()),
         Box::new(time::EspTime::new()),
         Box::new(storage::EspStorage::new()),
+        Box::new(http::EspHttp::new()),
     ));
     event::start_event_pump(Arc::clone(&board));
     board

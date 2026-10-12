@@ -57,5 +57,11 @@ esp_err_t board_hal_init(void)
         ESP_LOGW(TAG, "hal_storage_sd_init warning: %s", esp_err_to_name(ret));
     }
 
+    // 6. Initialize HTTP / HTTPS background client on Core 0
+    ret = hal_http_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "hal_http_init warning: %s", esp_err_to_name(ret));
+    }
+
     return ESP_OK;
 }
