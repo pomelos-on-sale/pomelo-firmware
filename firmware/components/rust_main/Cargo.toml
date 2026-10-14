@@ -108,6 +108,12 @@ pomelo-widgets = { path = "../../../../pomelo-widgets" }
 [patch."https://github.com/pomelos-on-sale/iced-pomelo-winit.git"]
 iced_winit = { path = "../../../../ui-framework/iced-pomelo-winit" }
 
+[patch."https://github.com/pomelos-on-sale/pomelo-material-symbols.git"]
+pomelo-material-symbols = { path = "../../../../ui-framework/pomelo-material-symbols" }
+
+[patch."ssh://git@github.com/pomelos-on-sale/pomelo-material-symbols.git"]
+pomelo-material-symbols = { path = "../../../../ui-framework/pomelo-material-symbols" }
+
 
 # Byte-for-byte the same numbers the image has always been built with — lifted from the repository
 # root's copy, which was itself lifted from this crate's earlier one when that root was introduced.
