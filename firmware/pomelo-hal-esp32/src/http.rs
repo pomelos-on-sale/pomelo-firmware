@@ -1,6 +1,7 @@
 use std::ffi::CString;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use pomelo_hal::{HalError, HttpBackend, HttpState};
+use pomelo_hal::{HalError, HttpBackend, HttpState, VALID_TIME_EPOCH_2026};
 
 mod ffi {
     use std::os::raw::{c_char, c_int};
@@ -44,6 +45,19 @@ impl EspHttp {
         unsafe { ffi::hal_http_init() };
         Self
     }
+
+    /// Returns whether the system clock is ready for HTTPS certificate validation:
+    /// SNTP is synced, or RTC timestamp is valid (>= 2026-01-01).
+    pub fn is_clock_ready(&self) -> bool {
+        if unsafe { ffi::hal_sntp_is_synced() } {
+            return true;
+        }
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now_unix >= VALID_TIME_EPOCH_2026
+    }
 }
 
 impl Default for EspHttp {
@@ -54,8 +68,8 @@ impl Default for EspHttp {
 
 impl HttpBackend for EspHttp {
     fn start(&mut self, url: &str) -> Result<(), HalError> {
-        // Guard against TLS certificate validation failure before time is synchronized
-        if url.starts_with("https://") && !unsafe { ffi::hal_sntp_is_synced() } {
+        // Guard against TLS certificate validation failure before time is synchronized or valid
+        if url.starts_with("https://") && !self.is_clock_ready() {
             return Err(HalError::ClockNotSynced);
         }
 
