@@ -374,6 +374,7 @@ void hal_display_set_power(bool on)
             lcd_cmd |= 0x02 << 24;
             uint8_t param = 255;
             esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
         s_display_active = on;
     }

@@ -169,7 +169,7 @@ impl AudioBackend for EspAudio {
 
         let control_clone = Arc::clone(&control);
 
-        let _ = std::thread::Builder::new()
+        let thread_res = std::thread::Builder::new()
             .name("audio_worker".into())
             .stack_size(16384)
             .spawn(move || {
@@ -235,6 +235,119 @@ impl AudioBackend for EspAudio {
                     control_clone.bytes_played.load(Ordering::Relaxed)
                 );
             });
+
+        if let Err(e) = thread_res {
+            eprintln!("[EspAudio] failed to spawn audio_worker thread: {e}");
+            unsafe {
+                ffi::hal_audio_close();
+            }
+            return Err(HalError::Io(format!("spawn audio_worker failed: {e}")));
+        }
+
+        self.meta = Some(meta);
+        self.control = Some(control);
+
+        Ok(meta)
+    }
+
+    fn play_pcm(
+        &mut self,
+        pcm: std::sync::Arc<Vec<u8>>,
+        sample_rate: u32,
+        channels: u8,
+        bits_per_sample: u8,
+    ) -> Result<AudioMeta, HalError> {
+        self.stop();
+
+        let byte_rate = sample_rate * (channels as u32) * ((bits_per_sample as u32) / 8);
+        let duration_secs = if byte_rate > 0 {
+            pcm.len() as f32 / byte_rate as f32
+        } else {
+            0.0
+        };
+
+        let meta = AudioMeta {
+            sample_rate,
+            channels,
+            bits_per_sample,
+            duration_secs,
+        };
+
+        let ret = unsafe {
+            ffi::hal_audio_open(
+                meta.sample_rate,
+                meta.channels,
+                meta.bits_per_sample,
+            )
+        };
+        if ret != 0 {
+            eprintln!("[EspAudio] ffi::hal_audio_open failed with error code: {ret}");
+            return Err(HalError::Internal(ret));
+        }
+
+        unsafe {
+            let _ = ffi::hal_audio_set_volume(self.volume);
+        }
+
+        let control = Arc::new(PlaybackControl {
+            is_playing: AtomicBool::new(true),
+            is_paused: AtomicBool::new(false),
+            stop_requested: AtomicBool::new(false),
+            bytes_played: AtomicU32::new(0),
+        });
+
+        let control_clone = Arc::clone(&control);
+        let pcm_clone = Arc::clone(&pcm);
+
+        let thread_res = std::thread::Builder::new()
+            .name("audio_pcm".into())
+            .stack_size(4096)
+            .spawn(move || {
+                let mut offset = 0;
+                let chunk_size = 2048;
+
+                while offset < pcm_clone.len() {
+                    if control_clone.stop_requested.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    if control_clone.is_paused.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                        continue;
+                    }
+
+                    let end = (offset + chunk_size).min(pcm_clone.len());
+                    let to_write = (end - offset) as u32;
+                    let ret = unsafe {
+                        ffi::hal_audio_write(pcm_clone[offset..end].as_ptr(), to_write)
+                    };
+                    if ret != 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    } else {
+                        control_clone.bytes_played.fetch_add(to_write, Ordering::Relaxed);
+                        offset = end;
+                    }
+                }
+
+                if !control_clone.stop_requested.load(Ordering::Relaxed) {
+                    unsafe {
+                        ffi::hal_audio_drain();
+                    }
+                }
+
+                unsafe {
+                    ffi::hal_audio_close();
+                }
+                control_clone.is_playing.store(false, Ordering::Relaxed);
+            });
+
+        if let Err(e) = thread_res {
+            eprintln!("[EspAudio] failed to spawn audio_pcm thread: {e}");
+            unsafe {
+                ffi::hal_audio_close();
+            }
+            return Err(HalError::Io(format!("spawn audio_pcm failed: {e}")));
+        }
 
         self.meta = Some(meta);
         self.control = Some(control);
