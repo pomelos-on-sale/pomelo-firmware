@@ -8,6 +8,7 @@
 #include "esp_sntp.h"
 #include <sys/time.h>
 #include <time.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "board_rtc";

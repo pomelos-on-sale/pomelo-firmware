@@ -183,6 +183,11 @@ bool hal_power_is_charging(void);
  */
 int32_t hal_power_get_battery_voltage_mv(void);
 
+/**
+ * @brief Reboot the system.
+ */
+void hal_power_reboot(void);
+
 /* ---------------------------------------------------------------------------
  * Wi-Fi station (esp_wifi).
  *

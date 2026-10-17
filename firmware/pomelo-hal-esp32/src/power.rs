@@ -15,6 +15,8 @@ mod ffi {
         pub fn hal_power_is_charging() -> bool;
         /// `int32_t hal_power_get_battery_voltage_mv(void)`; 0 = unavailable.
         pub fn hal_power_get_battery_voltage_mv() -> i32;
+        /// `void hal_power_reboot(void)`.
+        pub fn hal_power_reboot();
     }
 }
 
@@ -103,5 +105,11 @@ impl PowerBackend for EspPower {
         } else {
             Ok(Some(std::time::Duration::from_millis(ms as u64)))
         }
+    }
+
+    #[inline]
+    fn reboot(&mut self) -> Result<(), HalError> {
+        unsafe { ffi::hal_power_reboot() };
+        Ok(())
     }
 }

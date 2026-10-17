@@ -1,5 +1,6 @@
 #include "board_hal_internal.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
@@ -324,5 +325,12 @@ static void power_monitor_task(void *arg)
             }
         }
     }
+}
+
+void hal_power_reboot(void)
+{
+    ESP_LOGI(TAG, "Rebooting system...");
+    vTaskDelay(pdMS_TO_TICKS(150));
+    esp_restart();
 }
 

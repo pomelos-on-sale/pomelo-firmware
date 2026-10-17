@@ -93,7 +93,7 @@ void hal_display_wait_vsync(void)
     }
 }
 
-#define CHUNK_STRIP_WIDTH_DEFAULT 64
+#define CHUNK_STRIP_WIDTH_DEFAULT 32
 static int s_chunk_strip_width = CHUNK_STRIP_WIDTH_DEFAULT;
 static uint16_t *s_dma_chunk[2] = {NULL, NULL};
 
@@ -251,16 +251,16 @@ esp_err_t board_display_init(void)
 #endif
     s_last_frame_start_us = esp_timer_get_time();
 
-    // Allocate vertical strip Ping-Pong DMA buffers (480 * 64 * 2 = 60KB each) from internal DMA SRAM
+    // Allocate vertical strip Ping-Pong DMA buffers (480 * 32 * 2 = 30KB each, 60KB total) from internal DMA SRAM
     size_t chunk_bytes = BOARD_DISPLAY_HEIGHT * s_chunk_strip_width * sizeof(uint16_t);
     s_dma_chunk[0] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     s_dma_chunk[1] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
     if (!s_dma_chunk[0] || !s_dma_chunk[1]) {
-        ESP_LOGW(TAG, "Could not allocate 64-col DMA buffers (120KB), falling back to 32 cols...");
+        ESP_LOGW(TAG, "Could not allocate 32-col DMA buffers (60KB), falling back to 16 cols...");
         if (s_dma_chunk[0]) { free(s_dma_chunk[0]); s_dma_chunk[0] = NULL; }
         if (s_dma_chunk[1]) { free(s_dma_chunk[1]); s_dma_chunk[1] = NULL; }
-        s_chunk_strip_width = 32;
+        s_chunk_strip_width = 16;
         chunk_bytes = BOARD_DISPLAY_HEIGHT * s_chunk_strip_width * sizeof(uint16_t);
         s_dma_chunk[0] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         s_dma_chunk[1] = (uint16_t *)heap_caps_aligned_alloc(64, chunk_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);

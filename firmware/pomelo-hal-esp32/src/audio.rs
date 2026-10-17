@@ -4,12 +4,10 @@
 //! dedicated streaming worker thread. Supports arbitrary `Read` streams as well
 //! as local files, and drains the I2S DMA pipeline (`hal_audio_drain`) upon completion.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
-use pomelo_hal::wav::{parse_wav_header, WavMetadata};
 use pomelo_hal::{AudioBackend, AudioMeta, HalError};
 
 mod ffi {
@@ -31,7 +29,7 @@ struct PlaybackControl {
 }
 
 pub struct EspAudio {
-    meta: Option<WavMetadata>,
+    meta: Option<AudioMeta>,
     control: Option<Arc<PlaybackControl>>,
     volume: u8,
 }
@@ -64,6 +62,7 @@ impl EspAudio {
         if ret != 0 {
             return Err(HalError::Internal(ret));
         }
+
         unsafe {
             let _ = ffi::hal_audio_set_volume(self.volume);
         }
@@ -80,8 +79,9 @@ impl EspAudio {
 
         let _ = std::thread::Builder::new()
             .name("audio_stream".into())
+            .stack_size(8192)
             .spawn(move || {
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; 2048];
                 loop {
                     if control_clone.stop_requested.load(Ordering::Relaxed) {
                         break;
@@ -108,7 +108,10 @@ impl EspAudio {
                                 control_clone.bytes_played.fetch_add(n as u32, Ordering::Relaxed);
                             }
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            eprintln!("[EspAudio] stream read error: {e}");
+                            break;
+                        }
                     }
                 }
 
@@ -132,22 +135,24 @@ impl AudioBackend for EspAudio {
     fn play(&mut self, path: &str) -> Result<AudioMeta, HalError> {
         self.stop();
 
-        let mut file =
-            File::open(path).map_err(|e| HalError::Io(format!("failed to open '{path}': {e}")))?;
-        let mut header_buf = [0u8; 512];
-        let bytes_read = file
-            .read(&mut header_buf)
-            .map_err(|e| HalError::Io(e.to_string()))?;
-        let meta = parse_wav_header(&header_buf[..bytes_read]).map_err(HalError::Io)?;
+        println!("[EspAudio] play requested for path: '{path}'");
+        let mut decoder = pomelo_hal::AudioDecoder::open(path)?;
+        let meta = *decoder.meta();
+
+        println!(
+            "[EspAudio] Audio meta: {} Hz, {} ch, {}-bit, duration={:.2}s",
+            meta.sample_rate, meta.channels, meta.bits_per_sample, meta.duration_secs
+        );
 
         let ret = unsafe {
             ffi::hal_audio_open(
                 meta.sample_rate,
-                meta.channels as u8,
-                meta.bits_per_sample as u8,
+                meta.channels,
+                meta.bits_per_sample,
             )
         };
         if ret != 0 {
+            eprintln!("[EspAudio] ffi::hal_audio_open failed with error code: {ret}");
             return Err(HalError::Internal(ret));
         }
 
@@ -162,23 +167,16 @@ impl AudioBackend for EspAudio {
             bytes_played: AtomicU32::new(0),
         });
 
-        let data_offset = meta.data_offset as u64;
         let control_clone = Arc::clone(&control);
 
         let _ = std::thread::Builder::new()
             .name("audio_worker".into())
+            .stack_size(16384)
             .spawn(move || {
-                if file.seek(SeekFrom::Start(data_offset)).is_err() {
-                    control_clone.is_playing.store(false, Ordering::Relaxed);
-                    unsafe {
-                        ffi::hal_audio_close();
-                    }
-                    return;
-                }
-
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; 2048];
                 loop {
                     if control_clone.stop_requested.load(Ordering::Relaxed) {
+                        println!("[EspAudio] audio_worker received stop request");
                         break;
                     }
 
@@ -187,9 +185,10 @@ impl AudioBackend for EspAudio {
                         continue;
                     }
 
-                    match file.read(&mut buf) {
+                    match decoder.read(&mut buf) {
                         Ok(0) => {
                             // EOF: drain DMA pipeline before closing
+                            println!("[EspAudio] audio_worker reached EOF, draining DMA buffer...");
                             unsafe {
                                 ffi::hal_audio_drain();
                             }
@@ -220,7 +219,10 @@ impl AudioBackend for EspAudio {
                                 break;
                             }
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            eprintln!("[EspAudio] audio_worker read/decode error: {e}");
+                            break;
+                        }
                     }
                 }
 
@@ -228,19 +230,16 @@ impl AudioBackend for EspAudio {
                     ffi::hal_audio_close();
                 }
                 control_clone.is_playing.store(false, Ordering::Relaxed);
+                println!(
+                    "[EspAudio] playback thread finished, total bytes played: {}",
+                    control_clone.bytes_played.load(Ordering::Relaxed)
+                );
             });
-
-        let audio_meta = AudioMeta {
-            sample_rate: meta.sample_rate,
-            channels: meta.channels as u8,
-            bits_per_sample: meta.bits_per_sample as u8,
-            duration_secs: meta.duration_secs,
-        };
 
         self.meta = Some(meta);
         self.control = Some(control);
 
-        Ok(audio_meta)
+        Ok(meta)
     }
 
     fn pause(&mut self) {
@@ -284,9 +283,10 @@ impl AudioBackend for EspAudio {
     #[inline]
     fn position_secs(&self) -> f32 {
         if let (Some(ref meta), Some(ref c)) = (&self.meta, &self.control) {
-            if meta.byte_rate > 0 {
+            let byte_rate = meta.sample_rate * (meta.channels as u32) * ((meta.bits_per_sample as u32) / 8);
+            if byte_rate > 0 {
                 let bytes = c.bytes_played.load(Ordering::Relaxed);
-                return (bytes as f32 / meta.byte_rate as f32).min(meta.duration_secs);
+                return (bytes as f32 / byte_rate as f32).min(meta.duration_secs);
             }
         }
         0.0
