@@ -109,9 +109,8 @@ impl HalEvent {
                 let btn = unsafe { self.data.button };
                 match btn {
                     HalButtonEvent::BootPress => Some(SystemEvent::InputAction(InputAction::Back)),
-                    HalButtonEvent::SidePress | HalButtonEvent::PwrPress => {
-                        Some(SystemEvent::InputAction(InputAction::Exit))
-                    }
+                    HalButtonEvent::SidePress => Some(SystemEvent::InputAction(InputAction::Exit)),
+                    HalButtonEvent::PwrPress => Some(SystemEvent::InputAction(InputAction::Home)),
                     _ => None,
                 }
             }
@@ -119,7 +118,7 @@ impl HalEvent {
                 let pwr = unsafe { self.data.power };
                 match pwr.state {
                     HalPowerState::PekeyShort | HalPowerState::PekeyLong => {
-                        Some(SystemEvent::InputAction(InputAction::Exit))
+                        Some(SystemEvent::InputAction(InputAction::Home))
                     }
                     HalPowerState::ChargingStarted
                     | HalPowerState::ChargingStopped

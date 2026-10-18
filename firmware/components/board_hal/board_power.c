@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
@@ -156,14 +157,15 @@ esp_err_t hal_power_init(void)
         axp2101_write_reg(AXP2101_REG_CHG_VOL, reg64);
     }
 
-    // 7. Clear all IRQ status flags & enable PEKEY short press IRQ (Register 0x41 bit 1)
+    // 7. Clear all IRQ status flags & enable PEKEY short/long press and edge IRQs (Register 0x41 bits [3:0])
     axp2101_write_reg(AXP2101_REG_INTSTS1, 0xFF);
     axp2101_write_reg(AXP2101_REG_INTSTS2, 0xFF);
     axp2101_write_reg(AXP2101_REG_INTSTS3, 0xFF);
     uint8_t reg41 = 0;
     if (axp2101_read_reg(AXP2101_REG_INTEN1, &reg41) == ESP_OK) {
-        reg41 |= (1 << 1) | (1 << 0);
+        reg41 |= 0x0F; // Enable bits 3 (short press), 2 (long press), 1 (negative edge), 0 (positive edge)
         axp2101_write_reg(AXP2101_REG_INTEN1, reg41);
+        ESP_LOGI(TAG, "AXP2101 INTEN1 configured: 0x%02X", reg41);
     }
 
     if (s_power_task == NULL) {
@@ -291,22 +293,32 @@ static void power_monitor_task(void *arg)
     last_charging = hal_power_is_charging();
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
         tick_count++;
 
         if (!s_axp2101_dev) {
             continue;
         }
 
-        // 1. Check AXP2101 PEKEY IRQ status (Power button press)
-        uint8_t irq1 = 0;
-        if (axp2101_read_reg(AXP2101_REG_INTSTS1, &irq1) == ESP_OK && (irq1 & AXP2101_PEKEY_PRESS_MASK) != 0) {
-            axp2101_write_reg(AXP2101_REG_INTSTS1, irq1 & AXP2101_PEKEY_PRESS_MASK);
-            hal_event_t ev = {
-                .type = HAL_EVENT_BUTTON,
-                .data.button = HAL_BUTTON_EVENT_PWR_PRESS,
-            };
-            hal_event_send(&ev);
+        // 1. Check AXP2101 PEKEY IRQ status (Power button press in Register 0x49)
+        uint8_t irq2 = 0;
+        if (axp2101_read_reg(AXP2101_REG_INTSTS2, &irq2) == ESP_OK && (irq2 & 0x0F) != 0) {
+            ESP_LOGI(TAG, "AXP2101 PWR key event: INTSTS2=0x%02X", irq2);
+            axp2101_write_reg(AXP2101_REG_INTSTS2, irq2 & 0x0F); // W1C
+            // Debounce: trigger once per 300ms window
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            static int64_t s_last_pwr_press_ms = 0;
+            if (now_ms - s_last_pwr_press_ms > 300) {
+                // Bit 3: Short press, Bit 2: Long press, Bit 1: Negative edge (press down)
+                if ((irq2 & 0x0E) != 0) {
+                    s_last_pwr_press_ms = now_ms;
+                    hal_event_t ev = {
+                        .type = HAL_EVENT_BUTTON,
+                        .data.button = HAL_BUTTON_EVENT_PWR_PRESS,
+                    };
+                    hal_event_send(&ev);
+                }
+            }
         }
 
         // 2. Check charging state changes (VBUS insert/remove)
@@ -314,7 +326,7 @@ static void power_monitor_task(void *arg)
         bool charging_changed = (charging != last_charging);
 
         // 3. Check battery percentage (read every 1 second or immediately on charging change)
-        bool check_percent = (tick_count % 2 == 0) || charging_changed;
+        bool check_percent = (tick_count % 10 == 0) || charging_changed;
         if (check_percent) {
             int32_t raw_percent = read_raw_battery_percent();
             int32_t percent = smooth_battery_percent(raw_percent);
