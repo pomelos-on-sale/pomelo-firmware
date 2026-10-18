@@ -98,6 +98,7 @@ mod ffi {
         pub fn hal_event_wait(out_event: *mut HalEvent, timeout_ms: u32) -> bool;
         pub fn hal_display_is_active() -> bool;
         pub fn hal_display_set_power(on: bool);
+        pub fn hal_power_consume_wake_button() -> bool;
     }
 }
 
@@ -177,7 +178,8 @@ pub fn start_event_pump(board: Arc<Board>) {
                 // Wakes instantly on any hardware interrupt, or every 1 second to check clock.
                 if unsafe { ffi::hal_event_wait(&mut ev, 1000) } {
                     let display_active = unsafe { ffi::hal_display_is_active() };
-                    if !display_active {
+                    let wake_button_consumed = unsafe { ffi::hal_power_consume_wake_button() };
+                    if !display_active || wake_button_consumed {
                         let is_user_wake_action = match ev.event_type {
                             HalEventType::Button => {
                                 let btn = unsafe { ev.data.button };

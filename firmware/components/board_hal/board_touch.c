@@ -257,3 +257,22 @@ bool hal_touch_wait_event(hal_touch_event_t *out_event, uint32_t timeout_ms)
     TickType_t ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
     return xQueueReceive(s_touch_event_queue, out_event, ticks) == pdTRUE;
 }
+
+void hal_touch_resume(void)
+{
+    if (s_touch_sem != NULL) {
+        xSemaphoreGive(s_touch_sem);
+    }
+}
+
+void hal_touch_drain(void)
+{
+    if (s_touch_event_queue != NULL) {
+        hal_touch_event_t ev;
+        while (xQueueReceive(s_touch_event_queue, &ev, 0) == pdTRUE) {}
+    }
+    portENTER_CRITICAL(&s_touch_spinlock);
+    s_touch_cache.touched = false;
+    portEXIT_CRITICAL(&s_touch_spinlock);
+}
+

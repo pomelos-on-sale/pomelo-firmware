@@ -10,3 +10,4 @@ command -v idf.py >/dev/null || . "${IDF_PATH:-$HOME/.espressif/v6.1/esp-idf}/ex
 command -v cargo >/dev/null || . "$HOME/.cargo/env"
 
 idf.py -p "${1:-/dev/ttyACM0}" flash monitor
+

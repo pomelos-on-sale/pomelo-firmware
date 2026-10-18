@@ -366,6 +366,7 @@ void hal_display_set_power(bool on)
 {
     if (s_panel_handle) {
         ESP_LOGI(TAG, "Setting AMOLED display power: %s", on ? "ON" : "OFF");
+        fflush(stdout);
         esp_lcd_panel_disp_on_off(s_panel_handle, on);
         if (on && s_io_handle) {
             uint32_t lcd_cmd = 0x51;
@@ -385,17 +386,17 @@ bool hal_display_is_active(void)
     return s_display_active;
 }
 
-static uint32_t s_sleep_timeout_ms = 0;
+static uint32_t s_screen_off_timeout_ms = 0;
 
-void hal_display_set_sleep_timeout_ms(uint32_t timeout_ms)
+void hal_display_set_screen_off_timeout_ms(uint32_t timeout_ms)
 {
-    ESP_LOGI(TAG, "Setting AMOLED auto-sleep timeout: %lu ms (%s)",
+    ESP_LOGI(TAG, "Setting AMOLED screen-off timeout: %lu ms (%s)",
              (unsigned long)timeout_ms, timeout_ms == 0 ? "Never" : "Enabled");
-    s_sleep_timeout_ms = timeout_ms;
+    s_screen_off_timeout_ms = timeout_ms;
 }
 
-uint32_t hal_display_get_sleep_timeout_ms(void)
+uint32_t hal_display_get_screen_off_timeout_ms(void)
 {
-    return s_sleep_timeout_ms;
+    return s_screen_off_timeout_ms;
 }
 

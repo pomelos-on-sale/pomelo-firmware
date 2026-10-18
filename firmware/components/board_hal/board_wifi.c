@@ -44,6 +44,9 @@ static char           s_netmask[HAL_WIFI_IP_MAX_LEN] = {0};
 static char           s_gateway[HAL_WIFI_IP_MAX_LEN] = {0};
 static int8_t         s_rssi = 0;
 
+static bool           s_wifi_suspended = false;
+static char           s_saved_connected_ssid[HAL_WIFI_SSID_MAX_LEN] = {0};
+
 static inline void lock(void)
 {
     if (s_lock) {
@@ -149,6 +152,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             s_netmask[0] = '\0';
             s_gateway[0] = '\0';
             s_rssi = 0;
+            if (!s_wifi_suspended) {
+                s_saved_connected_ssid[0] = '\0';
+            }
             unlock();
             // The reason is the whole diagnosis, and it was being thrown away. 15 and 204 are a failed
             // four-way handshake — the password did not work; 201 is a network that is no longer
@@ -288,11 +294,13 @@ esp_err_t hal_wifi_set_enabled(bool on)
         (void)esp_wifi_disconnect();
         (void)esp_wifi_stop();
         s_enabled = false;
+        s_wifi_suspended = false;
 
         lock();
         s_conn_state = HAL_WIFI_STATE_DISCONNECTED;
         s_scan_state = HAL_WIFI_SCAN_IDLE;
         s_ssid[0] = '\0';
+        s_saved_connected_ssid[0] = '\0';
         s_ip[0] = '\0';
         s_netmask[0] = '\0';
         s_gateway[0] = '\0';
@@ -303,6 +311,48 @@ esp_err_t hal_wifi_set_enabled(bool on)
         ESP_LOGI(TAG, "Wi-Fi disabled");
     }
     return ESP_OK;
+}
+
+void hal_wifi_suspend(void)
+{
+    if (!s_inited || !s_enabled) {
+        return;
+    }
+    ESP_LOGI(TAG, "Suspending Wi-Fi radio for light sleep...");
+    lock();
+    if (s_ssid[0] != '\0') {
+        strncpy(s_saved_connected_ssid, s_ssid, sizeof(s_saved_connected_ssid) - 1);
+        s_saved_connected_ssid[sizeof(s_saved_connected_ssid) - 1] = '\0';
+    }
+    unlock();
+
+    s_wifi_suspended = true;
+    (void)esp_wifi_disconnect();
+    (void)esp_wifi_stop();
+}
+
+void hal_wifi_resume(void)
+{
+    if (!s_wifi_suspended) {
+        return;
+    }
+    s_wifi_suspended = false;
+    ESP_LOGI(TAG, "Resuming Wi-Fi radio from light sleep...");
+    esp_err_t ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_start failed after sleep: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    if (s_saved_connected_ssid[0] != '\0') {
+        ESP_LOGI(TAG, "Reconnecting Wi-Fi to \"%s\"...", s_saved_connected_ssid);
+        lock();
+        s_conn_state = HAL_WIFI_STATE_CONNECTING;
+        strncpy(s_ssid, s_saved_connected_ssid, sizeof(s_ssid) - 1);
+        s_ssid[sizeof(s_ssid) - 1] = '\0';
+        unlock();
+        (void)esp_wifi_connect();
+    }
 }
 
 bool hal_wifi_is_enabled(void)
@@ -394,6 +444,8 @@ esp_err_t hal_wifi_connect(const char *ssid, const char *password)
     s_conn_state = HAL_WIFI_STATE_CONNECTING;
     strncpy(s_ssid, ssid, HAL_WIFI_SSID_MAX_LEN - 1);
     s_ssid[HAL_WIFI_SSID_MAX_LEN - 1] = '\0';
+    strncpy(s_saved_connected_ssid, ssid, sizeof(s_saved_connected_ssid) - 1);
+    s_saved_connected_ssid[sizeof(s_saved_connected_ssid) - 1] = '\0';
     unlock();
 
     esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &wc);

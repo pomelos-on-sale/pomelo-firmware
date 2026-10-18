@@ -18,10 +18,24 @@ esp_err_t board_display_init(void);
  */
 esp_err_t board_touch_init(void);
 
+#define BOARD_BUTTON_BOOT_GPIO   GPIO_NUM_0
+#define BOARD_BUTTON_EXT_GPIO    GPIO_NUM_18
+#define BOARD_TOUCH_INT_GPIO     GPIO_NUM_11
+
 /**
  * @brief Initialize hardware GPIO button pins.
  */
 esp_err_t board_button_init(void);
+
+/**
+ * @brief Resume touch task immediately after wake from light sleep.
+ */
+void hal_touch_resume(void);
+
+/**
+ * @brief Drain buffered touch queue and reset touched state.
+ */
+void hal_touch_drain(void);
 
 #ifdef __cplusplus
 }

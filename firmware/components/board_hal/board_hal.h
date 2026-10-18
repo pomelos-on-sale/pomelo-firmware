@@ -47,14 +47,14 @@ void hal_display_set_power(bool on);
 bool hal_display_is_active(void);
 
 /**
- * @brief Set auto-sleep inactivity timeout in milliseconds. 0 disables auto-sleep.
+ * @brief Set screen-off inactivity timeout in milliseconds. 0 disables auto-screen-off.
  */
-void hal_display_set_sleep_timeout_ms(uint32_t timeout_ms);
+void hal_display_set_screen_off_timeout_ms(uint32_t timeout_ms);
 
 /**
- * @brief Get auto-sleep inactivity timeout in milliseconds. 0 means disabled.
+ * @brief Get screen-off inactivity timeout in milliseconds. 0 means disabled.
  */
-uint32_t hal_display_get_sleep_timeout_ms(void);
+uint32_t hal_display_get_screen_off_timeout_ms(void);
 
 /**
  * @brief Poll touch point. Returns true if touched, false if released.
@@ -84,6 +84,11 @@ typedef struct {
  * Returns true if an event was received, false on timeout.
  */
 bool hal_touch_wait_event(hal_touch_event_t *out_event, uint32_t timeout_ms);
+
+/**
+ * @brief Drain buffered touch queue and reset touched state.
+ */
+void hal_touch_drain(void);
 
 /**
  * @brief Button event types for interrupt-driven event queues.
@@ -188,6 +193,59 @@ int32_t hal_power_get_battery_voltage_mv(void);
  */
 void hal_power_reboot(void);
 
+/**
+ * @brief Wakeup source reasons after waking up from low-power sleep.
+ */
+typedef enum {
+    HAL_WAKEUP_REASON_NONE = 0,
+    HAL_WAKEUP_REASON_TIMER = 1,
+    HAL_WAKEUP_REASON_GPIO = 2,
+    HAL_WAKEUP_REASON_TOUCH = 3,
+    HAL_WAKEUP_REASON_UNKNOWN = 4,
+} hal_wakeup_reason_t;
+
+/**
+ * @brief Enter ESP32-S3 Light Sleep mode.
+ *
+ * Suspends the CPU in low-power mode, keeping SRAM and PSRAM powered.
+ * Wakeup sources: timer (max_sleep_ms if > 0), GPIO / touch.
+ *
+ * @param max_sleep_ms Maximum sleep duration in milliseconds (0 for indefinite until GPIO/touch).
+ * @return Wakeup reason.
+ */
+hal_wakeup_reason_t hal_power_enter_light_sleep(uint32_t max_sleep_ms);
+
+/**
+ * @brief Set system auto-sleep inactivity timeout in milliseconds. 0 disables auto-sleep.
+ */
+void hal_power_set_sleep_timeout_ms(uint32_t timeout_ms);
+
+/**
+ * @brief Get system auto-sleep inactivity timeout in milliseconds. 0 means disabled.
+ */
+uint32_t hal_power_get_sleep_timeout_ms(void);
+
+/**
+ * @brief Consume and clear the pending button wake gesture flag.
+ * Returns true if a button was pressed specifically to wake up the system.
+ */
+bool hal_power_consume_wake_button(void);
+
+/**
+ * @brief Returns whether USB power (VBUS) is currently connected.
+ */
+bool hal_power_is_usb_connected(void);
+
+/**
+ * @brief Configure whether to stay awake (prevent light sleep) when USB is connected.
+ */
+void hal_power_set_stay_awake_on_usb(bool enable);
+
+/**
+ * @brief Get whether stay awake on USB is enabled.
+ */
+bool hal_power_get_stay_awake_on_usb(void);
+
 /* ---------------------------------------------------------------------------
  * Wi-Fi station (esp_wifi).
  *
@@ -195,6 +253,16 @@ void hal_power_reboot(void);
  * via the scan-state / status getters. All state is cached by the event
  * handlers in board_wifi.c, so the Rust side never blocks on the driver.
  * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Suspend Wi-Fi radio before light sleep to achieve low sleep current (~2mA).
+ */
+void hal_wifi_suspend(void);
+
+/**
+ * @brief Resume Wi-Fi radio after wake-up and auto-reconnect if previously connected.
+ */
+void hal_wifi_resume(void);
 
 #define HAL_WIFI_SCAN_IDLE      0
 #define HAL_WIFI_SCAN_SCANNING  1

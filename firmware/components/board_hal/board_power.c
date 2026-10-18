@@ -1,6 +1,8 @@
 #include "board_hal_internal.h"
+#include <unistd.h>
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_sleep.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
@@ -34,6 +36,7 @@ static const char *TAG = "board_power";
 #define AXP2101_REG_BAT_PERCENT      0xA4  /* Battery fuel gauge percentage */
 
 // Bitmask constants
+#define AXP2101_STATUS1_VBUS_PRESENT (1 << 5)
 #define AXP2101_STATUS1_BATT_PRESENT (1 << 3)
 #define AXP2101_CHARGING_MASK        (0x07 << 5)
 #define AXP2101_CHARGING_ACTIVE      (0x01 << 5)
@@ -245,6 +248,20 @@ bool hal_power_is_charging(void)
     return false;
 }
 
+bool hal_power_is_usb_connected(void)
+{
+    if (!s_axp2101_dev) {
+        return false;
+    }
+    uint8_t status1 = 0;
+    if (axp2101_read_reg(AXP2101_REG_STATUS1, &status1) == ESP_OK) {
+        if ((status1 & AXP2101_STATUS1_VBUS_PRESENT) != 0) {
+            return true;
+        }
+    }
+    return hal_power_is_charging();
+}
+
 int32_t hal_power_get_battery_voltage_mv(void)
 {
     if (!s_axp2101_dev) {
@@ -333,4 +350,132 @@ void hal_power_reboot(void)
     vTaskDelay(pdMS_TO_TICKS(150));
     esp_restart();
 }
+
+static volatile bool s_wake_button_swallowed = false;
+
+bool hal_power_consume_wake_button(void)
+{
+    if (s_wake_button_swallowed) {
+        s_wake_button_swallowed = false;
+        return true;
+    }
+    return false;
+}
+
+hal_wakeup_reason_t hal_power_enter_light_sleep(uint32_t max_sleep_ms)
+{
+    ESP_LOGI(TAG, "Entering light sleep (max duration: %lu ms)...", (unsigned long)max_sleep_ms);
+    fflush(stdout);
+    fsync(fileno(stdout));
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Suspend Wi-Fi radio to lower sleep current to ~2mA
+    hal_wifi_suspend();
+
+    if (max_sleep_ms > 0) {
+        esp_sleep_enable_timer_wakeup((uint64_t)max_sleep_ms * 1000ULL);
+    }
+
+    // 1. Disable normal CPU interrupts on wake pins BEFORE configuring level wakeup.
+    // This prevents level-triggered interrupt storms the instant CPU un-gates on wake!
+    gpio_intr_disable(BOARD_TOUCH_INT_GPIO);
+    gpio_intr_disable(BOARD_BUTTON_BOOT_GPIO);
+    gpio_intr_disable(BOARD_BUTTON_EXT_GPIO);
+
+    // 2. Configure hardware GPIO wakeup for light sleep
+    gpio_wakeup_enable(BOARD_TOUCH_INT_GPIO, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(BOARD_BUTTON_BOOT_GPIO, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(BOARD_BUTTON_EXT_GPIO, GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+
+    // 3. Enter low-power light sleep (CPU suspended, RAM & cache retained)
+    esp_err_t err = esp_light_sleep_start();
+
+    // 4. CRITICAL: Immediately upon wake-up, disable GPIO wakeup & restore edge triggers
+    // BEFORE re-enabling interrupts or handling I2C/logging!
+    gpio_wakeup_disable(BOARD_TOUCH_INT_GPIO);
+    gpio_wakeup_disable(BOARD_BUTTON_BOOT_GPIO);
+    gpio_wakeup_disable(BOARD_BUTTON_EXT_GPIO);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    if (max_sleep_ms > 0) {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    }
+
+    // Restore normal edge interrupt trigger types
+    gpio_set_intr_type(BOARD_TOUCH_INT_GPIO, GPIO_INTR_NEGEDGE);
+    gpio_set_intr_type(BOARD_BUTTON_BOOT_GPIO, GPIO_INTR_ANYEDGE);
+    gpio_set_intr_type(BOARD_BUTTON_EXT_GPIO, GPIO_INTR_ANYEDGE);
+
+    // Re-enable normal CPU interrupts
+    gpio_intr_enable(BOARD_TOUCH_INT_GPIO);
+    gpio_intr_enable(BOARD_BUTTON_BOOT_GPIO);
+    gpio_intr_enable(BOARD_BUTTON_EXT_GPIO);
+
+    // Resume Wi-Fi radio and restore network connection
+    hal_wifi_resume();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_light_sleep_start failed: %s", esp_err_to_name(err));
+        return HAL_WAKEUP_REASON_NONE;
+    }
+
+    uint32_t causes = esp_sleep_get_wakeup_causes();
+    uint64_t gpio_mask = 0;
+    if (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) {
+        gpio_mask = esp_sleep_get_gpio_wakeup_status();
+    }
+
+    // Resume touch task so it performs I2C read to clear CST816 INT line back to HIGH
+    hal_touch_resume();
+
+    // Determine wakeup reason and set swallow flags
+    hal_wakeup_reason_t reason = HAL_WAKEUP_REASON_NONE;
+    if (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) {
+        reason = HAL_WAKEUP_REASON_TIMER;
+    } else if (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) {
+        if ((gpio_mask & (1ULL << BOARD_TOUCH_INT_GPIO)) || gpio_get_level(BOARD_TOUCH_INT_GPIO) == 0) {
+            reason = HAL_WAKEUP_REASON_TOUCH;
+            hal_touch_drain();
+        } else {
+            reason = HAL_WAKEUP_REASON_GPIO;
+            s_wake_button_swallowed = true;
+        }
+    } else {
+        reason = HAL_WAKEUP_REASON_UNKNOWN;
+    }
+
+    ESP_LOGI(TAG, "Woke up from light sleep, causes: 0x%lx, gpio_mask: 0x%llx, reason: %d",
+             (unsigned long)causes, (unsigned long long)gpio_mask, (int)reason);
+    fflush(stdout);
+
+    return reason;
+}
+
+static uint32_t s_sleep_timeout_ms = 0;
+
+void hal_power_set_sleep_timeout_ms(uint32_t timeout_ms)
+{
+    ESP_LOGI(TAG, "Setting system auto-sleep timeout: %lu ms (%s)",
+             (unsigned long)timeout_ms, timeout_ms == 0 ? "Never" : "Enabled");
+    s_sleep_timeout_ms = timeout_ms;
+}
+
+uint32_t hal_power_get_sleep_timeout_ms(void)
+{
+    return s_sleep_timeout_ms;
+}
+
+static bool s_stay_awake_on_usb = true;
+
+void hal_power_set_stay_awake_on_usb(bool enable)
+{
+    ESP_LOGI(TAG, "Setting stay awake on USB: %s", enable ? "true" : "false");
+    s_stay_awake_on_usb = enable;
+}
+
+bool hal_power_get_stay_awake_on_usb(void)
+{
+    return s_stay_awake_on_usb;
+}
+
 

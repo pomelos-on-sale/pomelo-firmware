@@ -3,7 +3,7 @@
 //! Raw `extern "C"` bindings for the `hal_power_*` C API live in the private
 //! `ffi` module below; the safe trait impl is a thin wrapper over them.
 
-use pomelo_hal::{HalError, PowerBackend};
+use pomelo_hal::{HalError, PowerBackend, WakeupReason};
 
 mod ffi {
     extern "C" {
@@ -17,6 +17,12 @@ mod ffi {
         pub fn hal_power_get_battery_voltage_mv() -> i32;
         /// `void hal_power_reboot(void)`.
         pub fn hal_power_reboot();
+        /// `bool hal_power_is_usb_connected(void)`.
+        pub fn hal_power_is_usb_connected() -> bool;
+        /// `void hal_power_set_stay_awake_on_usb(bool enable)`.
+        pub fn hal_power_set_stay_awake_on_usb(enable: bool);
+        /// `bool hal_power_get_stay_awake_on_usb(void)`.
+        pub fn hal_power_get_stay_awake_on_usb() -> bool;
     }
 }
 
@@ -83,23 +89,23 @@ impl PowerBackend for EspPower {
     }
 
     #[inline]
-    fn set_sleep_timeout(&mut self, timeout: Option<std::time::Duration>) -> Result<(), HalError> {
+    fn set_screen_off_timeout(&mut self, timeout: Option<std::time::Duration>) -> Result<(), HalError> {
         extern "C" {
-            fn hal_display_set_sleep_timeout_ms(timeout_ms: u32);
+            fn hal_display_set_screen_off_timeout_ms(timeout_ms: u32);
         }
         let ms = timeout
             .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
             .unwrap_or(0);
-        unsafe { hal_display_set_sleep_timeout_ms(ms) };
+        unsafe { hal_display_set_screen_off_timeout_ms(ms) };
         Ok(())
     }
 
     #[inline]
-    fn sleep_timeout(&self) -> Result<Option<std::time::Duration>, HalError> {
+    fn screen_off_timeout(&self) -> Result<Option<std::time::Duration>, HalError> {
         extern "C" {
-            fn hal_display_get_sleep_timeout_ms() -> u32;
+            fn hal_display_get_screen_off_timeout_ms() -> u32;
         }
-        let ms = unsafe { hal_display_get_sleep_timeout_ms() };
+        let ms = unsafe { hal_display_get_screen_off_timeout_ms() };
         if ms == 0 {
             Ok(None)
         } else {
@@ -108,8 +114,68 @@ impl PowerBackend for EspPower {
     }
 
     #[inline]
+    fn set_sleep_timeout(&mut self, timeout: Option<std::time::Duration>) -> Result<(), HalError> {
+        extern "C" {
+            fn hal_power_set_sleep_timeout_ms(timeout_ms: u32);
+        }
+        let ms = timeout
+            .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
+            .unwrap_or(0);
+        unsafe { hal_power_set_sleep_timeout_ms(ms) };
+        Ok(())
+    }
+
+    #[inline]
+    fn sleep_timeout(&self) -> Result<Option<std::time::Duration>, HalError> {
+        extern "C" {
+            fn hal_power_get_sleep_timeout_ms() -> u32;
+        }
+        let ms = unsafe { hal_power_get_sleep_timeout_ms() };
+        if ms == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(std::time::Duration::from_millis(ms as u64)))
+        }
+    }
+
+    #[inline]
+    fn enter_sleep(&mut self, max_sleep: Option<std::time::Duration>) -> Result<WakeupReason, HalError> {
+        extern "C" {
+            fn hal_power_enter_light_sleep(max_sleep_ms: u32) -> u32;
+        }
+        let ms = max_sleep
+            .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
+            .unwrap_or(0);
+        let raw_reason = unsafe { hal_power_enter_light_sleep(ms) };
+        let reason = match raw_reason {
+            1 => WakeupReason::Timer,
+            2 => WakeupReason::Gpio,
+            3 => WakeupReason::Touch,
+            0 => WakeupReason::None,
+            _ => WakeupReason::Unknown,
+        };
+        Ok(reason)
+    }
+
+    #[inline]
     fn reboot(&mut self) -> Result<(), HalError> {
         unsafe { ffi::hal_power_reboot() };
+        Ok(())
+    }
+
+    #[inline]
+    fn is_usb_connected(&self) -> Result<bool, HalError> {
+        Ok(unsafe { ffi::hal_power_is_usb_connected() })
+    }
+
+    #[inline]
+    fn stay_awake_on_usb(&self) -> Result<bool, HalError> {
+        Ok(unsafe { ffi::hal_power_get_stay_awake_on_usb() })
+    }
+
+    #[inline]
+    fn set_stay_awake_on_usb(&mut self, enable: bool) -> Result<(), HalError> {
+        unsafe { ffi::hal_power_set_stay_awake_on_usb(enable) };
         Ok(())
     }
 }
