@@ -8,7 +8,7 @@
 use std::ffi::{c_char, CString};
 use std::sync::Mutex;
 
-use pomelo_hal::wifi_credentials::{self, WifiCredentials};
+use pomelo_hal::wifi_credentials::WifiCredentials;
 use pomelo_hal::{ApInfo, HalError, ScanState, WifiBackend, WifiState, WifiStatus};
 
 mod ffi {
@@ -101,26 +101,18 @@ fn io_error(error: std::io::Error) -> HalError {
 
 impl WifiBackend for EspWifi {
     fn init(&mut self) -> Result<(), HalError> {
-        // Read once, here. `Ok(None)` is a board that has never been on a network and is not worth a
-        // line; an `Err` is a file that is there and unreadable, which is a different problem from
-        // no file at all and must not be reported as one.
-        match WifiCredentials::load(wifi_credentials::BOARD_APP_DATA) {
-            Ok(saved) => {
-                if let Some(saved) = &saved {
-                    eprintln!(
-                        "[wifi] init: loaded credentials from storage: enabled={}, ssid={:?}, autoconnect={}",
-                        saved.enabled, saved.ssid, saved.autoconnect
-                    );
-                } else {
-                    eprintln!(
-                        "[wifi] init: no credentials file found at {}",
-                        wifi_credentials::path(wifi_credentials::BOARD_APP_DATA).display()
-                    );
-                }
-                *SAVED.lock().unwrap() = saved;
-            }
-            Err(error) => eprintln!("[wifi] the credentials file is unreadable: {error}"),
-        }
+        let creds = WifiCredentials::load_active();
+        let saved = if creds.has_network() || creds.enabled {
+            eprintln!(
+                "[wifi] init: loaded credentials from storage: enabled={}, ssid={:?}, autoconnect={}",
+                creds.enabled, creds.ssid, creds.autoconnect
+            );
+            Some(creds)
+        } else {
+            eprintln!("[wifi] init: no saved credentials found");
+            None
+        };
+        *SAVED.lock().unwrap() = saved;
 
         HalError::from_code(unsafe { ffi::hal_wifi_init() })?;
 
@@ -167,13 +159,12 @@ impl WifiBackend for EspWifi {
 
     fn remember(&mut self, credentials: &WifiCredentials) -> Result<(), HalError> {
         eprintln!(
-            "[wifi] writing credentials to {}: enabled={}, ssid={:?}",
-            wifi_credentials::path(wifi_credentials::BOARD_APP_DATA).display(),
+            "[wifi] writing credentials: enabled={}, ssid={:?}",
             credentials.enabled,
             credentials.ssid
         );
         credentials
-            .save(wifi_credentials::BOARD_APP_DATA)
+            .save_active()
             .map_err(io_error)?;
 
         eprintln!(
@@ -185,7 +176,7 @@ impl WifiBackend for EspWifi {
     }
 
     fn forget(&mut self) -> Result<(), HalError> {
-        WifiCredentials::forget(wifi_credentials::BOARD_APP_DATA).map_err(io_error)?;
+        WifiCredentials::forget_active().map_err(io_error)?;
 
         eprintln!("[wifi] forgot the remembered network");
         *SAVED.lock().unwrap() = None;

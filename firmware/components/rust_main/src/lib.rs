@@ -11,7 +11,7 @@ pub extern "C" fn rust_main_entry() {
         eprintln!("\n🚨 [RUST PANIC] {info}\n");
     }));
 
-    // Load environment from /internal/AppData/.env
+    // Load environment configuration from persistent storage (NVS) or .env
     app_launcher::load_environment();
 
     let board = pomelo_hal_esp32::board();
