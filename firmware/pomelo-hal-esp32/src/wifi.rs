@@ -93,14 +93,11 @@ impl Default for EspWifi {
 /// again: `saved` is called by whatever draws the page, and a filesystem read behind a getter is a
 /// cost nobody would see coming.
 static SAVED: Mutex<Option<WifiCredentials>> = Mutex::new(None);
+static SAVED_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DRIVER_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// A failed filesystem call, as the HAL's error type.
-fn io_error(error: std::io::Error) -> HalError {
-    HalError::Io(error.to_string())
-}
-
-impl WifiBackend for EspWifi {
-    fn init(&mut self) -> Result<(), HalError> {
+fn ensure_saved_loaded() {
+    if !SAVED_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         let creds = WifiCredentials::load_active();
         let saved = if creds.has_network() || creds.enabled {
             eprintln!(
@@ -113,9 +110,26 @@ impl WifiBackend for EspWifi {
             None
         };
         *SAVED.lock().unwrap() = saved;
+    }
+}
 
+fn ensure_driver_init() -> Result<(), HalError> {
+    ensure_saved_loaded();
+    if !DRIVER_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         HalError::from_code(unsafe { ffi::hal_wifi_init() })?;
+    }
+    Ok(())
+}
 
+/// A failed filesystem call, as the HAL's error type.
+fn io_error(error: std::io::Error) -> HalError {
+    HalError::Io(error.to_string())
+}
+
+impl WifiBackend for EspWifi {
+    fn init(&mut self) -> Result<(), HalError> {
+        // Fast path: Pre-load credentials from KV cache into memory without blocking UI thread on radio stack.
+        ensure_saved_loaded();
         Ok(())
     }
 
@@ -128,6 +142,7 @@ impl WifiBackend for EspWifi {
     ///
     /// Called from a thread of its own by `rust_main`, so the panel is up before the radio is.
     fn autoconnect(&mut self) -> Result<(), HalError> {
+        ensure_driver_init()?;
         let Some(saved) = self.saved() else {
             eprintln!("[wifi] autoconnect: no saved config, radio stays off");
             return Ok(());
@@ -154,6 +169,7 @@ impl WifiBackend for EspWifi {
     }
 
     fn saved(&self) -> Option<WifiCredentials> {
+        ensure_saved_loaded();
         SAVED.lock().unwrap().clone()
     }
 
@@ -190,6 +206,7 @@ impl WifiBackend for EspWifi {
     /// `autoconnect`'s job, and it is the only path to either. Writing here would put the file back
     /// in the driver's hands, which is the thing the file exists to stop.
     fn set_enabled(&mut self, on: bool) -> Result<(), HalError> {
+        ensure_driver_init()?;
         HalError::from_code(unsafe { ffi::hal_wifi_set_enabled(on) })
     }
 
@@ -199,6 +216,7 @@ impl WifiBackend for EspWifi {
     }
 
     fn scan_start(&mut self) -> Result<(), HalError> {
+        ensure_driver_init()?;
         HalError::from_code(unsafe { ffi::hal_wifi_scan_start() })
     }
 
@@ -249,6 +267,7 @@ impl WifiBackend for EspWifi {
     }
 
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), HalError> {
+        ensure_driver_init()?;
         let c_ssid = CString::new(ssid).map_err(|_| HalError::InvalidArg)?;
         let c_pwd = CString::new(password).map_err(|_| HalError::InvalidArg)?;
 

@@ -44,12 +44,8 @@ esp_err_t board_button_init(void)
         return ret;
     }
 
-    // Register button ISR handlers (install service only if not already active)
-    esp_err_t isr_add_ret = gpio_isr_handler_add(BOARD_BUTTON_BOOT_GPIO, button_gpio_isr_handler, (void *)BOARD_BUTTON_BOOT_GPIO);
-    if (isr_add_ret == ESP_ERR_INVALID_STATE) {
-        gpio_install_isr_service(0);
-        gpio_isr_handler_add(BOARD_BUTTON_BOOT_GPIO, button_gpio_isr_handler, (void *)BOARD_BUTTON_BOOT_GPIO);
-    }
+    // Register button ISR handlers (service initialized globally in board_hal_init)
+    gpio_isr_handler_add(BOARD_BUTTON_BOOT_GPIO, button_gpio_isr_handler, (void *)BOARD_BUTTON_BOOT_GPIO);
     gpio_isr_handler_add(BOARD_BUTTON_EXT_GPIO, button_gpio_isr_handler, (void *)BOARD_BUTTON_EXT_GPIO);
 
     return ESP_OK;

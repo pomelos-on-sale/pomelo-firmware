@@ -36,6 +36,7 @@ static SemaphoreHandle_t s_te_sem = NULL;
 static volatile uint32_t s_te_count = 0;
 static bool s_te_active = false;
 static int64_t s_last_frame_start_us = 0;
+static int64_t s_sleep_out_timestamp_us = 0;
 static bool s_display_active = false;
 
 #if BSP_LCD_TE_ENABLED
@@ -101,7 +102,7 @@ static uint16_t *s_dma_chunk[2] = {NULL, NULL};
 // CO5300 AMOLED Panel Initialization Command Sequence
 // =============================================================================
 static const co5300_lcd_init_cmd_t s_lcd_init_cmds[] = {
-    {0x11, (uint8_t[]){0x00}, 0, 120}, // Sleep out (requires 120ms standard delay per CO5300 datasheet)
+    {0x11, (uint8_t[]){0x00}, 0, 0},   // Sleep out (non-blocking: charge pump ramps up in parallel with UI render)
     {0xFE, (uint8_t[]){0x20}, 1, 0},   // Select vendor command page 1
     {0x19, (uint8_t[]){0x10}, 1, 0},   // Vendor setting
     {0x1C, (uint8_t[]){0xA0}, 1, 0},   // Vendor setting
@@ -231,6 +232,7 @@ esp_err_t board_display_init(void)
 
     esp_lcd_panel_reset(s_panel_handle);
     esp_lcd_panel_init(s_panel_handle);
+    s_sleep_out_timestamp_us = esp_timer_get_time();
     // Keep display blanked/off until first valid frame is written to prevent power-on green flash
     esp_lcd_panel_disp_on_off(s_panel_handle, false);
     ESP_LOGI(TAG, "AMOLED panel controller initialized (standby mode, blanked).");
@@ -350,6 +352,15 @@ void hal_display_draw_bitmap(int32_t x1, int32_t y1, int32_t x2, int32_t y2, con
 
     // Turn on display and full brightness seamlessly once the first valid frame is written
     if (!s_display_active) {
+        // Enforce CO5300 120ms Sleep Out charge-pump hardware requirement
+        if (s_sleep_out_timestamp_us > 0) {
+            int64_t elapsed_us = esp_timer_get_time() - s_sleep_out_timestamp_us;
+            if (elapsed_us < 120000) {
+                int64_t wait_ms = (120000 - elapsed_us + 999) / 1000;
+                ESP_LOGI(TAG, "Waiting remaining %lld ms for AMOLED charge pump", (long long)wait_ms);
+                vTaskDelay(pdMS_TO_TICKS(wait_ms));
+            }
+        }
         esp_lcd_panel_disp_on_off(s_panel_handle, true);
         uint32_t lcd_cmd = 0x51;
         lcd_cmd &= 0xff;

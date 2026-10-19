@@ -66,13 +66,29 @@ ssize_t __wrap__write_r(struct _reent *r, int fd, const void *data, size_t size)
     return ret;
 }
 
+void app_main(void)
+{
+    // =========================================================================
+    // 【关键防护】：设置 stdout / stderr 为完全非缓冲模式（_IONBF）
+    // -------------------------------------------------------------------------
+    // 本板使用 USB-Serial-JTAG 作为主控制台。在纯电池模式（无物理 USB 连接）下，
+    // 配合 __wrap_write 确保输出安全静默丢弃，防止 Rust std 触发致命 panic。
+    // =========================================================================
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
-    // Initialize display, touch, PMIC hardware, and SD card background monitor
+    ESP_LOGI(TAG, "===============================================");
+    ESP_LOGI(TAG, "  ESP-IDF Bootloader & Kernel Initialized");
+    ESP_LOGI(TAG, "  Target: ESP32-S3 (Xtensa Dual-Core LX7)");
+    ESP_LOGI(TAG, "  Two-Track Fast Boot Architecture Activated");
+    ESP_LOGI(TAG, "===============================================");
+
+    // Initialize display & core power (Track 1) and spawn background worker (Track 2)
     esp_err_t err = board_hal_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "board_hal_init failed: %d", err);
     } else {
-        ESP_LOGI(TAG, "Hardware initialized successfully.");
+        ESP_LOGI(TAG, "Hardware core initialized successfully.");
     }
 
     ESP_LOGI(TAG, "Handing over to Rust GUI Shell...");

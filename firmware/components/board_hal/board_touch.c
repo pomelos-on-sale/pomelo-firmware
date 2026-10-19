@@ -193,8 +193,11 @@ esp_err_t board_touch_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    // Register hardware interrupt callback (installs GPIO ISR service internally if not already active)
+    // Register hardware interrupt callback (esp_lcd_touch unconditionally calls gpio_install_isr_service,
+    // so temporarily suppress redundant "already installed" error log from gpio component)
+    esp_log_level_set("gpio", ESP_LOG_NONE);
     esp_err_t cb_err = esp_lcd_touch_register_interrupt_callback(s_touch_handle, touch_isr_callback);
+    esp_log_level_set("gpio", ESP_LOG_WARN);
     if (cb_err != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_touch_register_interrupt_callback: %s (falling back to adaptive timer)",
                  esp_err_to_name(cb_err));
