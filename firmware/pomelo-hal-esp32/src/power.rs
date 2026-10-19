@@ -3,7 +3,7 @@
 //! Raw `extern "C"` bindings for the `hal_power_*` C API live in the private
 //! `ffi` module below; the safe trait impl is a thin wrapper over them.
 
-use pomelo_hal::{HalError, PowerBackend, WakeupReason};
+use pomelo_hal::{HalError, PowerBackend};
 
 mod ffi {
     extern "C" {
@@ -111,50 +111,6 @@ impl PowerBackend for EspPower {
         } else {
             Ok(Some(std::time::Duration::from_millis(ms as u64)))
         }
-    }
-
-    #[inline]
-    fn set_sleep_timeout(&mut self, timeout: Option<std::time::Duration>) -> Result<(), HalError> {
-        extern "C" {
-            fn hal_power_set_sleep_timeout_ms(timeout_ms: u32);
-        }
-        let ms = timeout
-            .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
-            .unwrap_or(0);
-        unsafe { hal_power_set_sleep_timeout_ms(ms) };
-        Ok(())
-    }
-
-    #[inline]
-    fn sleep_timeout(&self) -> Result<Option<std::time::Duration>, HalError> {
-        extern "C" {
-            fn hal_power_get_sleep_timeout_ms() -> u32;
-        }
-        let ms = unsafe { hal_power_get_sleep_timeout_ms() };
-        if ms == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(std::time::Duration::from_millis(ms as u64)))
-        }
-    }
-
-    #[inline]
-    fn enter_sleep(&mut self, max_sleep: Option<std::time::Duration>) -> Result<WakeupReason, HalError> {
-        extern "C" {
-            fn hal_power_enter_light_sleep(max_sleep_ms: u32) -> u32;
-        }
-        let ms = max_sleep
-            .map(|d| d.as_millis().min(u32::MAX as u128) as u32)
-            .unwrap_or(0);
-        let raw_reason = unsafe { hal_power_enter_light_sleep(ms) };
-        let reason = match raw_reason {
-            1 => WakeupReason::Timer,
-            2 => WakeupReason::Gpio,
-            3 => WakeupReason::Touch,
-            0 => WakeupReason::None,
-            _ => WakeupReason::Unknown,
-        };
-        Ok(reason)
     }
 
     #[inline]

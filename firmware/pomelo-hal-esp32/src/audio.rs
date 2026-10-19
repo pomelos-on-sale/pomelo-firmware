@@ -18,6 +18,7 @@ mod ffi {
         pub fn hal_audio_drain() -> i32;
         pub fn hal_audio_set_volume(volume: u8) -> i32;
         pub fn hal_audio_close() -> i32;
+        pub fn hal_audio_configure_pthread(stack_size: u32, use_psram: bool) -> i32;
     }
 }
 
@@ -31,6 +32,7 @@ struct PlaybackControl {
 pub struct EspAudio {
     meta: Option<AudioMeta>,
     control: Option<Arc<PlaybackControl>>,
+    worker_handle: Option<std::thread::JoinHandle<()>>,
     volume: u8,
 }
 
@@ -43,6 +45,7 @@ impl EspAudio {
         Self {
             meta: None,
             control: None,
+            worker_handle: None,
             volume: 75,
         }
     }
@@ -75,13 +78,16 @@ impl EspAudio {
         });
 
         let control_clone = Arc::clone(&control);
-        self.control = Some(control);
 
-        let _ = std::thread::Builder::new()
+        unsafe {
+            let _ = ffi::hal_audio_configure_pthread(32768, true);
+        }
+
+        let handle = std::thread::Builder::new()
             .name("audio_stream".into())
-            .stack_size(8192)
+            .stack_size(32768)
             .spawn(move || {
-                let mut buf = [0u8; 2048];
+                let mut buf = vec![0u8; 2048];
                 loop {
                     if control_clone.stop_requested.load(Ordering::Relaxed) {
                         break;
@@ -121,6 +127,13 @@ impl EspAudio {
                 control_clone.is_playing.store(false, Ordering::Relaxed);
             });
 
+        unsafe {
+            let _ = ffi::hal_audio_configure_pthread(0, false);
+        }
+
+        self.control = Some(control);
+        self.worker_handle = handle.ok();
+
         Ok(())
     }
 }
@@ -131,12 +144,32 @@ impl Default for EspAudio {
     }
 }
 
-impl AudioBackend for EspAudio {
-    fn play(&mut self, path: &str) -> Result<AudioMeta, HalError> {
+impl EspAudio {
+    fn play_internal(&mut self, path: &str, is_loop: bool) -> Result<AudioMeta, HalError> {
         self.stop();
 
-        println!("[EspAudio] play requested for path: '{path}'");
-        let mut decoder = pomelo_hal::AudioDecoder::open(path)?;
+        println!("[EspAudio] streaming play requested for path: '{path}', loop={is_loop}");
+
+        // Pre-read compressed audio bytes on caller thread (stack in internal SRAM):
+        // In ESP-IDF, background tasks with stacks in PSRAM are forbidden from calling
+        // SPI flash / LittleFS APIs because flash operations disable cache and assert
+        // `esp_task_stack_is_sane_cache_disabled()`.
+        // Reading the compressed file (typically 20KB~30KB) into memory avoids any flash
+        // access inside the PSRAM audio worker thread.
+        let bytes = std::fs::read(path)
+            .map_err(|e| HalError::Io(format!("failed to read '{path}': {e}")))?;
+
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp3")
+            .to_string();
+
+        let bytes_arc = Arc::new(bytes);
+        let bytes_clone = Arc::clone(&bytes_arc);
+        let ext_clone = ext.clone();
+
+        let mut decoder = pomelo_hal::AudioDecoder::from_bytes((*bytes_arc).clone(), Some(&ext))?;
         let meta = *decoder.meta();
 
         println!(
@@ -169,11 +202,21 @@ impl AudioBackend for EspAudio {
 
         let control_clone = Arc::clone(&control);
 
+        // Configure pthread worker stack to 64KB in PSRAM:
+        // Symphonia's nested frame parsing, Huffman lookup, and DCT synthesis require ample
+        // stack space. We configure esp_pthread to allocate the thread stack from PSRAM
+        // (MALLOC_CAP_SPIRAM) and pass .stack_size(65536) explicitly so Rust std sets
+        // pthread_attr_setstacksize without falling back to ESP-IDF's default 3KB internal stack.
+        unsafe {
+            let _ = ffi::hal_audio_configure_pthread(65536, true);
+        }
+
         let thread_res = std::thread::Builder::new()
             .name("audio_worker".into())
-            .stack_size(16384)
+            .stack_size(65536)
             .spawn(move || {
-                let mut buf = [0u8; 2048];
+                println!("[EspAudio] audio_worker thread started (loop={is_loop})");
+                let mut buf = vec![0u8; 2048];
                 loop {
                     if control_clone.stop_requested.load(Ordering::Relaxed) {
                         println!("[EspAudio] audio_worker received stop request");
@@ -187,12 +230,28 @@ impl AudioBackend for EspAudio {
 
                     match decoder.read(&mut buf) {
                         Ok(0) => {
-                            // EOF: drain DMA pipeline before closing
-                            println!("[EspAudio] audio_worker reached EOF, draining DMA buffer...");
-                            unsafe {
-                                ffi::hal_audio_drain();
+                            if is_loop {
+                                if control_clone.stop_requested.load(Ordering::Relaxed) {
+                                    break;
+                                }
+                                match pomelo_hal::AudioDecoder::from_bytes((*bytes_clone).clone(), Some(&ext_clone)) {
+                                    Ok(new_decoder) => {
+                                        decoder = new_decoder;
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[EspAudio] loop reopen error: {e}");
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // EOF: drain DMA pipeline before closing
+                                println!("[EspAudio] audio_worker reached EOF, draining DMA buffer...");
+                                unsafe {
+                                    ffi::hal_audio_drain();
+                                }
+                                break;
                             }
-                            break;
                         }
                         Ok(n) => {
                             let mut written = 0;
@@ -236,18 +295,37 @@ impl AudioBackend for EspAudio {
                 );
             });
 
-        if let Err(e) = thread_res {
-            eprintln!("[EspAudio] failed to spawn audio_worker thread: {e}");
-            unsafe {
-                ffi::hal_audio_close();
-            }
-            return Err(HalError::Io(format!("spawn audio_worker failed: {e}")));
+        // Restore default pthread configuration on current thread
+        unsafe {
+            let _ = ffi::hal_audio_configure_pthread(0, false);
         }
+
+        let handle = match thread_res {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("[EspAudio] failed to spawn audio_worker thread: {e}");
+                unsafe {
+                    ffi::hal_audio_close();
+                }
+                return Err(HalError::Io(format!("spawn audio_worker failed: {e}")));
+            }
+        };
 
         self.meta = Some(meta);
         self.control = Some(control);
+        self.worker_handle = Some(handle);
 
         Ok(meta)
+    }
+}
+
+impl AudioBackend for EspAudio {
+    fn play(&mut self, path: &str) -> Result<AudioMeta, HalError> {
+        self.play_internal(path, false)
+    }
+
+    fn play_loop(&mut self, path: &str) -> Result<AudioMeta, HalError> {
+        self.play_internal(path, true)
     }
 
     fn play_pcm(
@@ -341,16 +419,11 @@ impl AudioBackend for EspAudio {
                 control_clone.is_playing.store(false, Ordering::Relaxed);
             });
 
-        if let Err(e) = thread_res {
-            eprintln!("[EspAudio] failed to spawn audio_pcm thread: {e}");
-            unsafe {
-                ffi::hal_audio_close();
-            }
-            return Err(HalError::Io(format!("spawn audio_pcm failed: {e}")));
-        }
+        let handle = thread_res.ok();
 
         self.meta = Some(meta);
         self.control = Some(control);
+        self.worker_handle = handle;
 
         Ok(meta)
     }
@@ -371,6 +444,9 @@ impl AudioBackend for EspAudio {
         if let Some(ref c) = self.control {
             c.stop_requested.store(true, Ordering::Relaxed);
             c.is_playing.store(false, Ordering::Relaxed);
+        }
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
         }
         unsafe {
             ffi::hal_audio_close();

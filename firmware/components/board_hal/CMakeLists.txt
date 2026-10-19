@@ -46,6 +46,8 @@ idf_component_register(
         esp_rom
         esp_http_client
         mbedtls
+        pthread
+        heap
 )
 
 # Intercept POSIX settimeofday and clock_settime so they automatically persist to hardware RTC

@@ -196,38 +196,9 @@ void hal_power_reboot(void);
 /**
  * @brief Wakeup source reasons after waking up from low-power sleep.
  */
-typedef enum {
-    HAL_WAKEUP_REASON_NONE = 0,
-    HAL_WAKEUP_REASON_TIMER = 1,
-    HAL_WAKEUP_REASON_GPIO = 2,
-    HAL_WAKEUP_REASON_TOUCH = 3,
-    HAL_WAKEUP_REASON_UNKNOWN = 4,
-} hal_wakeup_reason_t;
-
-/**
- * @brief Enter ESP32-S3 Light Sleep mode.
- *
- * Suspends the CPU in low-power mode, keeping SRAM and PSRAM powered.
- * Wakeup sources: timer (max_sleep_ms if > 0), GPIO / touch.
- *
- * @param max_sleep_ms Maximum sleep duration in milliseconds (0 for indefinite until GPIO/touch).
- * @return Wakeup reason.
- */
-hal_wakeup_reason_t hal_power_enter_light_sleep(uint32_t max_sleep_ms);
-
-/**
- * @brief Set system auto-sleep inactivity timeout in milliseconds. 0 disables auto-sleep.
- */
-void hal_power_set_sleep_timeout_ms(uint32_t timeout_ms);
-
-/**
- * @brief Get system auto-sleep inactivity timeout in milliseconds. 0 means disabled.
- */
-uint32_t hal_power_get_sleep_timeout_ms(void);
-
 /**
  * @brief Consume and clear the pending button wake gesture flag.
- * Returns true if a button was pressed specifically to wake up the system.
+ * Returns true if a button was pressed specifically to wake up the screen.
  */
 bool hal_power_consume_wake_button(void);
 
@@ -237,7 +208,7 @@ bool hal_power_consume_wake_button(void);
 bool hal_power_is_usb_connected(void);
 
 /**
- * @brief Configure whether to stay awake (prevent light sleep) when USB is connected.
+ * @brief Configure whether to stay awake (keep screen on) when USB is connected.
  */
 void hal_power_set_stay_awake_on_usb(bool enable);
 
@@ -353,6 +324,11 @@ esp_err_t hal_audio_set_volume(uint8_t volume);
  * @brief Close audio codec
  */
 esp_err_t hal_audio_close(void);
+
+/**
+ * @brief Configure pthread creation parameters (stack size, PSRAM allocation) for audio workers
+ */
+esp_err_t hal_audio_configure_pthread(uint32_t stack_size, bool use_psram);
 
 /* ---------------------------------------------------------------------------
  * PCF85063A Real-Time Clock (RTC) and SNTP Network Time.
