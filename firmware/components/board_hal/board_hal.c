@@ -1,5 +1,6 @@
 #include "board_hal_internal.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include <sys/stat.h>
 
 static const char *TAG = "board_hal";
@@ -13,7 +14,19 @@ int lstat(const char *path, struct stat *st)
 
 esp_err_t board_hal_init(void)
 {
-    // 0. Initialize unified hardware event queue
+    // 0. Initialize Flash NVS partitions (default nvs and dedicated nvs_app)
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+    nvs_err = nvs_flash_init_partition("nvs_app");
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase_partition("nvs_app");
+        nvs_flash_init_partition("nvs_app");
+    }
+
+    // 0.5. Initialize unified hardware event queue
     hal_event_init();
 
     // 1. Initialize PMIC power management first to ensure power hold and display rail

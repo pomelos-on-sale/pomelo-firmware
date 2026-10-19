@@ -45,9 +45,6 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
 # CONFIG_ESP_WIFI_*_BUFFER_NUM options.
 CONFIG_ESP_WIFI_ENABLED=y
 
-# LittleFS SPIFFS compatibility (auto-create parent directories on file open)
-CONFIG_LITTLEFS_SPIFFS_COMPAT=y
-
 # FatFS SD Card configuration (UTF-8 and Long File Name support)
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255

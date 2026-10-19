@@ -4,7 +4,6 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include "esp_log.h"
-#include "esp_littlefs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "board_hal.h"
@@ -68,51 +67,6 @@ ssize_t __wrap__write_r(struct _reent *r, int fd, const void *data, size_t size)
 }
 
 
-static void fs_init(void)
-{
-    size_t total = 0, used = 0;
-    esp_vfs_littlefs_conf_t conf = {
-        .base_path = "/internal",
-        .partition_label = "internal",
-        .format_if_mount_failed = true,
-        .dont_mount = false,
-    };
-
-    esp_err_t ret = esp_vfs_littlefs_register(&conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount or format LittleFS partition 'internal' (%d)", ret);
-        return;
-    }
-
-    esp_littlefs_info(conf.partition_label, &total, &used);
-    ESP_LOGI(TAG, "LittleFS mounted at /internal: total=%u, used=%u bytes", (unsigned)total, (unsigned)used);
-}
-
-void app_main(void)
-{
-    // =========================================================================
-    // 【关键防护】：设置 stdout / stderr 为完全非缓冲模式（_IONBF）
-    // -------------------------------------------------------------------------
-    // 背景与原理：
-    // 本板使用 USB-Serial-JTAG 作为主控制台。当设备在【纯电池模式】（无物理 USB 连接）
-    // 下启动时，底层 USB FIFO 无法被上位机读取而迅速写满。
-    // Rust 标准库的 println!() 宏在标准输出写入失败（如 Broken Pipe / EIO）时，
-    // 其底层设计会无条件触发致命 panic!()，在 panic = "abort" 策略下直接调用 abort()
-    // 导致芯片软复位重启，从而在电池模式下形成无限关机-重启的幽灵死循环！
-    // 
-    // 通过将 stdout 和 stderr 设置为 _IONBF（无缓冲直接刷写），配合 ESP-IDF VFS
-    // 的静默溢出丢弃机制，可确保控制台输出在断开连接时安全丢弃，绝不上报致命 I/O
-    // 错误，彻底斩断 Rust 端的 Panic 重启链条！
-    // =========================================================================
-    setvbuf(stdout, NULL, _IONBF, 0);
-    setvbuf(stderr, NULL, _IONBF, 0);
-
-    ESP_LOGI(TAG, "===============================================");
-    ESP_LOGI(TAG, "  ESP-IDF v6.1 Bootloader & Kernel Initialized");
-    ESP_LOGI(TAG, "  Target: ESP32-S3 (Xtensa Dual-Core LX7)");
-    ESP_LOGI(TAG, "  Initializing AMOLED & Touch Hardware...");
-    ESP_LOGI(TAG, "===============================================");
-
     // Initialize display, touch, PMIC hardware, and SD card background monitor
     esp_err_t err = board_hal_init();
     if (err != ESP_OK) {
@@ -120,9 +74,6 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "Hardware initialized successfully.");
     }
-
-    // Initialize LittleFS internal partition at /internal
-    fs_init();
 
     ESP_LOGI(TAG, "Handing over to Rust GUI Shell...");
 

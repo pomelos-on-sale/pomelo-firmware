@@ -420,6 +420,17 @@ esp_err_t hal_storage_sd_init(void);
 esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free_bytes);
 
 /* ---------------------------------------------------------------------------
+ * Flash NVS Key-Value Storage API
+ * ------------------------------------------------------------------------- */
+
+typedef void (*hal_nvs_dump_cb)(const char *ns, const char *key, const void *data, size_t len, void *ctx);
+
+esp_err_t hal_nvs_get_blob(const char *part, const char *ns, const char *key, void *out_buf, size_t *inout_len);
+esp_err_t hal_nvs_set_blob(const char *part, const char *ns, const char *key, const void *data, size_t len);
+esp_err_t hal_nvs_erase_key(const char *part, const char *ns, const char *key);
+esp_err_t hal_nvs_dump_all(const char *part, hal_nvs_dump_cb cb, void *ctx);
+
+/* ---------------------------------------------------------------------------
  * HTTP / HTTPS Client Subsystem
  * ------------------------------------------------------------------------- */
 

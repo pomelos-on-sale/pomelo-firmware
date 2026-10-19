@@ -150,12 +150,6 @@ impl EspAudio {
 
         println!("[EspAudio] streaming play requested for path: '{path}', loop={is_loop}");
 
-        // Pre-read compressed audio bytes on caller thread (stack in internal SRAM):
-        // In ESP-IDF, background tasks with stacks in PSRAM are forbidden from calling
-        // SPI flash / LittleFS APIs because flash operations disable cache and assert
-        // `esp_task_stack_is_sane_cache_disabled()`.
-        // Reading the compressed file (typically 20KB~30KB) into memory avoids any flash
-        // access inside the PSRAM audio worker thread.
         let bytes = std::fs::read(path)
             .map_err(|e| HalError::Io(format!("failed to read '{path}': {e}")))?;
 
@@ -165,7 +159,19 @@ impl EspAudio {
             .unwrap_or("mp3")
             .to_string();
 
-        let bytes_arc = Arc::new(bytes);
+        self.play_bytes_internal(&bytes, Some(&ext), is_loop)
+    }
+
+    fn play_bytes_internal(
+        &mut self,
+        bytes: &[u8],
+        format_hint: Option<&str>,
+        is_loop: bool,
+    ) -> Result<AudioMeta, HalError> {
+        self.stop();
+
+        let ext = format_hint.unwrap_or("mp3").to_string();
+        let bytes_arc = Arc::new(bytes.to_vec());
         let bytes_clone = Arc::clone(&bytes_arc);
         let ext_clone = ext.clone();
 
@@ -326,6 +332,22 @@ impl AudioBackend for EspAudio {
 
     fn play_loop(&mut self, path: &str) -> Result<AudioMeta, HalError> {
         self.play_internal(path, true)
+    }
+
+    fn play_bytes(
+        &mut self,
+        bytes: &'static [u8],
+        format_hint: Option<&str>,
+    ) -> Result<AudioMeta, HalError> {
+        self.play_bytes_internal(bytes, format_hint, false)
+    }
+
+    fn play_bytes_loop(
+        &mut self,
+        bytes: &'static [u8],
+        format_hint: Option<&str>,
+    ) -> Result<AudioMeta, HalError> {
+        self.play_bytes_internal(bytes, format_hint, true)
     }
 
     fn play_pcm(

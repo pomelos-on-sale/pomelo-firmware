@@ -10,6 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "board_hal.h"
 #include "bsp/esp32_s3_touch_amoled_2_16.h"
 
@@ -435,3 +437,100 @@ esp_err_t hal_storage_sd_init(void)
 
     return (res == pdPASS) ? ESP_OK : ESP_FAIL;
 }
+
+/* ---------------------------------------------------------------------------
+ * Flash NVS Key-Value Storage API Implementation
+ * ------------------------------------------------------------------------- */
+
+esp_err_t hal_nvs_get_blob(const char *part, const char *ns, const char *key, void *out_buf, size_t *inout_len)
+{
+    if (!ns || !key || !inout_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t handle;
+    const char *p = (part && part[0]) ? part : "nvs_app";
+    esp_err_t err = nvs_open_from_partition(p, ns, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
+        err = nvs_open(ns, NVS_READONLY, &handle);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_get_blob(handle, key, out_buf, inout_len);
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t hal_nvs_set_blob(const char *part, const char *ns, const char *key, const void *data, size_t len)
+{
+    if (!ns || !key || !data) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t handle;
+    const char *p = (part && part[0]) ? part : "nvs_app";
+    esp_err_t err = nvs_open_from_partition(p, ns, NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
+        err = nvs_open(ns, NVS_READWRITE, &handle);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_blob(handle, key, data, len);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t hal_nvs_erase_key(const char *part, const char *ns, const char *key)
+{
+    if (!ns || !key) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t handle;
+    const char *p = (part && part[0]) ? part : "nvs_app";
+    esp_err_t err = nvs_open_from_partition(p, ns, NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
+        err = nvs_open(ns, NVS_READWRITE, &handle);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_erase_key(handle, key);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t hal_nvs_dump_all(const char *part, hal_nvs_dump_cb cb, void *ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const char *p = (part && part[0]) ? part : "nvs_app";
+    nvs_iterator_t it = NULL;
+    esp_err_t err = nvs_entry_find(p, NULL, NVS_TYPE_ANY, &it);
+    while (err == ESP_OK && it != NULL) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        size_t len = 0;
+        if (hal_nvs_get_blob(p, info.namespace_name, info.key, NULL, &len) == ESP_OK && len > 0) {
+            uint8_t *buf = (uint8_t *)malloc(len);
+            if (buf) {
+                if (hal_nvs_get_blob(p, info.namespace_name, info.key, buf, &len) == ESP_OK) {
+                    cb(info.namespace_name, info.key, buf, len, ctx);
+                }
+                free(buf);
+            }
+        }
+        err = nvs_entry_next(&it);
+    }
+    if (it != NULL) {
+        nvs_release_iterator(it);
+    }
+    return ESP_OK;
+}
+

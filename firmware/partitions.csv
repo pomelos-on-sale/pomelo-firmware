@@ -2,7 +2,8 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-# The app partition is 12 MB for the firmware and embedded font assets.
-# internal takes 3 MB (offset 0xC10000), leaving ample room within the 16 MB flash.
-factory,  app,  factory, 0x10000,  0xC00000,
-internal, data, spiffs,  0xC10000, 0x300000,
+# Dedicated NVS partition (64 KB) for application and system key-value configurations
+nvs_app,  data, nvs,     0x10000, 0x10000,
+# The app partition is ~12 MB for the firmware and embedded font/media assets.
+factory,  app,  factory, 0x20000, 0xBE0000,
+
