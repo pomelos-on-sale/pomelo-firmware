@@ -103,7 +103,7 @@ mod ffi {
 }
 
 impl HalEvent {
-    pub fn to_system_event(&self, board: &Board) -> Option<SystemEvent> {
+    pub fn to_system_event(self, board: &Board) -> Option<SystemEvent> {
         match self.event_type {
             HalEventType::Button => {
                 let btn = unsafe { self.data.button };
