@@ -23,6 +23,10 @@ mod ffi {
         pub fn hal_power_set_stay_awake_on_usb(enable: bool);
         /// `bool hal_power_get_stay_awake_on_usb(void)`.
         pub fn hal_power_get_stay_awake_on_usb() -> bool;
+        /// `void hal_power_set_keep_screen_on(bool enable)`.
+        pub fn hal_power_set_keep_screen_on(enable: bool);
+        /// `bool hal_power_get_keep_screen_on(void)`.
+        pub fn hal_power_get_keep_screen_on() -> bool;
     }
 }
 
@@ -132,6 +136,17 @@ impl PowerBackend for EspPower {
     #[inline]
     fn set_stay_awake_on_usb(&mut self, enable: bool) -> Result<(), HalError> {
         unsafe { ffi::hal_power_set_stay_awake_on_usb(enable) };
+        Ok(())
+    }
+
+    #[inline]
+    fn is_keep_screen_on(&self) -> Result<bool, HalError> {
+        Ok(unsafe { ffi::hal_power_get_keep_screen_on() })
+    }
+
+    #[inline]
+    fn set_keep_screen_on(&mut self, enable: bool) -> Result<(), HalError> {
+        unsafe { ffi::hal_power_set_keep_screen_on(enable) };
         Ok(())
     }
 }

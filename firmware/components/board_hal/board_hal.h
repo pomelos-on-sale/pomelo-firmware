@@ -217,6 +217,16 @@ void hal_power_set_stay_awake_on_usb(bool enable);
  */
 bool hal_power_get_stay_awake_on_usb(void);
 
+/**
+ * @brief Configure whether the system is requested to keep the screen on by an active app (e.g. alarm ringing).
+ */
+void hal_power_set_keep_screen_on(bool enable);
+
+/**
+ * @brief Get whether keep screen on is requested.
+ */
+bool hal_power_get_keep_screen_on(void);
+
 /* ---------------------------------------------------------------------------
  * Wi-Fi station (esp_wifi).
  *

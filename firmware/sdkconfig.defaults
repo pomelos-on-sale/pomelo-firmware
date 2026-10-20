@@ -18,8 +18,8 @@ CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_USE_MALLOC=y
 # Direct all normal heap allocations (including Rust data structures) to 8MB/16MB PSRAM
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
-# Strictly reserve 32KB of internal SRAM for critical DMA buffers, FreeRTOS stacks & semaphores
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+# Strictly reserve 48KB of internal SRAM for critical DMA buffers, FreeRTOS stacks & semaphores
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 
 # Custom Partition Table (11MB LittleFS storage)
 CONFIG_PARTITION_TABLE_CUSTOM=y

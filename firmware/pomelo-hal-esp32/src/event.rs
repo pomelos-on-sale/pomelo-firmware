@@ -174,10 +174,13 @@ pub fn start_event_pump(board: Arc<Board>) {
             let mut last_minute = u32::MAX;
             loop {
                 // Blocks in FreeRTOS xQueueReceive with 0% CPU!
-                // Wakes instantly on any hardware interrupt, or every 1 second to check clock.
-                if unsafe { ffi::hal_event_wait(&mut ev, 1000) } {
+                // Wakes instantly on any hardware interrupt, or every 500ms to check clock & wakeups.
+                let has_event = unsafe { ffi::hal_event_wait(&mut ev, 500) };
+                if has_event {
+                    println!("[event_pump] HW event: type={:?}", ev.event_type);
                     let display_active = unsafe { ffi::hal_display_is_active() };
                     let wake_button_consumed = unsafe { ffi::hal_power_consume_wake_button() };
+                    let mut swallow_event = false;
                     if !display_active || wake_button_consumed {
                         let is_user_wake_action = match ev.event_type {
                             HalEventType::Button => {
@@ -200,15 +203,18 @@ pub fn start_event_pump(board: Arc<Board>) {
                         };
 
                         if is_user_wake_action {
+                            println!("[event_pump] User wake action detected, turning display ON");
                             // Turn display back on!
                             unsafe { ffi::hal_display_set_power(true) };
                             // Swallow wake-up button press to prevent accidental UI triggers
-                            continue;
+                            swallow_event = true;
                         }
                     }
 
-                    if let Some(sys_ev) = ev.to_system_event(&board) {
-                        board.emit_event(sys_ev);
+                    if !swallow_event {
+                        if let Some(sys_ev) = ev.to_system_event(&board) {
+                            board.emit_event(sys_ev);
+                        }
                     }
                 }
 
@@ -220,6 +226,10 @@ pub fn start_event_pump(board: Arc<Board>) {
                     let local_secs = total_secs + 28800; // UTC+8
                     let current_minute = ((local_secs % 86400) / 60) as u32;
                     if current_minute != last_minute {
+                        println!(
+                            "[event_pump] Minute rollover: last={} -> current={} (epoch={})",
+                            last_minute, current_minute, total_secs
+                        );
                         last_minute = current_minute;
                         let percent = board.power().battery_percent().unwrap_or(0);
                         let charging = board.power().is_charging().unwrap_or(false);
@@ -230,6 +240,21 @@ pub fn start_event_pump(board: Arc<Board>) {
                             voltage_mv,
                         });
                     }
+                }
+
+                // Check and dispatch scheduled system wakeup events (e.g. alarm clock)
+                for req in board.wakeup_scheduler().poll_expired() {
+                    println!(
+                        "[event_pump] Wakeup triggered: id='{}', wake_screen={}",
+                        req.id, req.wake_screen
+                    );
+                    if req.wake_screen && !board.is_display_on() {
+                        let _ = board.set_display_power(true);
+                    }
+                    board.emit_event(SystemEvent::WakeupTriggered {
+                        id: req.id,
+                        wake_screen: req.wake_screen,
+                    });
                 }
             }
         })

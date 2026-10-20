@@ -66,6 +66,17 @@ esp_err_t hal_audio_open(uint32_t sample_rate, uint8_t channels, uint8_t bits_pe
             return ESP_FAIL;
         }
     }
+    // Defensive safety check: ensure adequate internal DMA memory before attempting hardware open/reconfig.
+    // I2S DMA descriptors and buffers are pre-allocated at boot; reconfig only needs minimal headroom.
+    size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    size_t largest_dma_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (free_dma < 1024 || largest_dma_block < 512) {
+        ESP_LOGW(TAG, "Insufficient internal DMA memory to open audio: free=%u, largest_block=%u",
+                 (unsigned)free_dma, (unsigned)largest_dma_block);
+        audio_unlock();
+        return ESP_ERR_NO_MEM;
+    }
+
     if (s_audio_opened) {
         esp_codec_dev_close(s_spk_codec_dev);
         s_audio_opened = false;

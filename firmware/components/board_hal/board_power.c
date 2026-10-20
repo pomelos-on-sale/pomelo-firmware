@@ -388,4 +388,17 @@ bool hal_power_get_stay_awake_on_usb(void)
     return s_stay_awake_on_usb;
 }
 
+static bool s_keep_screen_on = false;
+
+void hal_power_set_keep_screen_on(bool enable)
+{
+    ESP_LOGI(TAG, "Setting keep screen on: %s", enable ? "true" : "false");
+    s_keep_screen_on = enable;
+}
+
+bool hal_power_get_keep_screen_on(void)
+{
+    return s_keep_screen_on;
+}
+
 
