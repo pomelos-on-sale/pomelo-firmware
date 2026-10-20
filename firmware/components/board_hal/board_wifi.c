@@ -436,8 +436,8 @@ esp_err_t hal_wifi_connect(const char *ssid, const char *password)
     // second copy. `WIFI_STORAGE_FLASH` is IDF's default -- board_wifi.c never chose it -- so
     // without this, every attempt writes the SSID and password into `nvs.net80211` whether it
     // works or not, and the driver's opinion of which network this board belongs to sits in flash
-    // beside the app's file with nothing to reconcile them. The app writes
-    // /internal/AppData/WIFI/wifi.conf instead; see `pomelo-hal`'s `wifi_credentials`.
+    // beside the app's settings with nothing to reconcile them. The app manages credentials
+    // in Flash NVS ('WIFI'/'credentials'); see `pomelo-hal`'s `wifi_credentials`.
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
     lock();
