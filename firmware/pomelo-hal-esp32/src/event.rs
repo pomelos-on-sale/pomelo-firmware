@@ -171,6 +171,7 @@ pub fn start_event_pump(board: Arc<Board>) {
         .name("hal_event_pump".into())
         .spawn(move || {
             let mut ev = HalEvent::default();
+            let mut last_second = u64::MAX;
             let mut last_minute = u32::MAX;
             loop {
                 // Blocks in FreeRTOS xQueueReceive with 0% CPU!
@@ -218,27 +219,24 @@ pub fn start_event_pump(board: Arc<Board>) {
                     }
                 }
 
-                // Check minute rollover for system-wide clock updates
+                // Check second & minute rollover for system-wide clock updates
                 if let Ok(duration) =
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                 {
                     let total_secs = duration.as_secs();
-                    let local_secs = total_secs + 28800; // UTC+8
-                    let current_minute = ((local_secs % 86400) / 60) as u32;
-                    if current_minute != last_minute {
-                        println!(
-                            "[event_pump] Minute rollover: last={} -> current={} (epoch={})",
-                            last_minute, current_minute, total_secs
-                        );
-                        last_minute = current_minute;
-                        let percent = board.power().battery_percent().unwrap_or(0);
-                        let charging = board.power().is_charging().unwrap_or(false);
-                        let voltage_mv = board.power().battery_voltage_mv().unwrap_or(0);
-                        board.emit_event(SystemEvent::BatteryChanged {
-                            percent,
-                            charging,
-                            voltage_mv,
-                        });
+                    if total_secs != last_second {
+                        last_second = total_secs;
+                        board.emit_event(SystemEvent::SecondTick { unix_secs: total_secs });
+
+                        let current_minute = (total_secs / 60) as u32;
+                        if current_minute != last_minute {
+                            println!(
+                                "[event_pump] Minute rollover: last={} -> current={} (epoch={})",
+                                last_minute, current_minute, total_secs
+                            );
+                            last_minute = current_minute;
+                            board.emit_event(SystemEvent::MinuteTick { unix_secs: total_secs });
+                        }
                     }
                 }
 
