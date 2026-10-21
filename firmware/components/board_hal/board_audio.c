@@ -84,6 +84,12 @@ static esp_err_t audio_i2s_init(void)
         if (ret != ESP_OK) goto err;
     }
 
+    // ES8311 requires MCLK to be stable for ~10ms before its internal PLL locks
+    // and the I2C control interface becomes responsive. Without this delay the
+    // first I2C probe issued by es8311_codec_new() races the PLL startup and
+    // produces "I2C_If: Fail to read/write dev 0x18" / "ES8311: Open fail".
+    vTaskDelay(pdMS_TO_TICKS(20));
+
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = BOARD_PIN_I2S_NUM,
         .rx_handle = s_i2s_rx_chan,
