@@ -12,6 +12,17 @@
 #include "driver/spi_master.h"
 
 // =============================================================================
+// 0. 硬件特性能力开关 (Hardware Capabilities & Feature Flags)
+// 适配新开发板时：有对应硬件置 1，缺失对应硬件置 0 即可自动优雅降级！
+// =============================================================================
+#define BOARD_HAS_PMIC_AXP2101          1  // 1: 板载 AXP2101 PMIC; 0: 无 PMIC (直接 LDO/USB 供电)
+#define BOARD_HAS_AUDIO_SPEAKER         1  // 1: 板载 I2S 硬件音频编解码器 (ES8311 + 功放); 0: 降级为 Null Audio 虚拟声卡
+#define BOARD_HAS_RTC_PCF85063A         1  // 1: 板载外置硬件 RTC; 0: 降级为 ESP32-S3 内部晶振走时 + SNTP 校准
+#define BOARD_HAS_SD_CARD               1  // 1: 板载 MicroSD 卡槽; 0: 禁用 SD 检测与驱动，释放 4KB 任务栈
+#define BOARD_HAS_BUTTON_BOOT           1  // 1: 板载 BOOT 实体按键; 0: 忽略该按键
+#define BOARD_HAS_BUTTON_EXT            1  // 1: 板载物理扩展/侧边按键; 0: 忽略该按键
+
+// =============================================================================
 // 1. 屏幕显示接口引脚 (Display / AMOLED CO5300 QSPI)
 // =============================================================================
 #define BOARD_PIN_LCD_SPI_HOST      SPI2_HOST

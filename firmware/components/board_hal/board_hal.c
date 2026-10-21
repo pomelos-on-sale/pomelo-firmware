@@ -130,17 +130,13 @@ esp_err_t board_hal_init(void)
     // 0.7. Initialize shared I2C master bus for PMIC, RTC, and Touch
     hal_i2c_get_master_bus();
 
-    // 1. Initialize PMIC power management first to ensure power hold and display rail (~4ms)
-    ESP_LOGI(TAG, "Initializing AXP2101 Power Management IC...");
+    // 1. Initialize power management
     esp_err_t ret = hal_power_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "hal_power_init warning: %s", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI(TAG, "AXP2101 PMIC successfully configured.");
     }
 
-    // 1.5. Initialize PCF85063A hardware RTC and restore system clock (~3ms)
-    ESP_LOGI(TAG, "Initializing PCF85063A Real-Time Clock...");
+    // 1.5. Initialize RTC and restore system clock
     ret = hal_rtc_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "hal_rtc_init warning: %s", esp_err_to_name(ret));

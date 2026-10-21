@@ -1,6 +1,5 @@
 #include "board_hal.h"
 #include "board_hal_internal.h"
-#include "pcf85063a.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -13,13 +12,17 @@
 
 static const char *TAG = "board_rtc";
 
-static pcf85063a_dev_t s_pcf_dev;
-static bool s_rtc_initialized = false;
-static SemaphoreHandle_t s_rtc_lock = NULL;
-
 /* Linker wrap prototypes for POSIX time setters */
 extern int __real_settimeofday(const struct timeval *tv, const struct timezone *tz);
 extern int __real_clock_settime(clockid_t clock_id, const struct timespec *tp);
+
+#if BOARD_HAS_RTC_PCF85063A
+
+#include "pcf85063a.h"
+
+static pcf85063a_dev_t s_pcf_dev;
+static bool s_rtc_initialized = false;
+static SemaphoreHandle_t s_rtc_lock = NULL;
 
 /**
  * @brief Howard Hinnant algorithm for civil date to days since Unix epoch (1970-01-01).
@@ -119,6 +122,8 @@ static esp_err_t hal_rtc_restore_to_system(void)
     }
 }
 
+#endif // BOARD_HAS_RTC_PCF85063A
+
 /* ---------------------------------------------------------------------------
  * POSIX API Interception (Linker Wrappers)
  * ---------------------------------------------------------------------------
@@ -129,6 +134,7 @@ static esp_err_t hal_rtc_restore_to_system(void)
 int __wrap_settimeofday(const struct timeval *tv, const struct timezone *tz)
 {
     int ret = __real_settimeofday(tv, tz);
+#if BOARD_HAS_RTC_PCF85063A
     if (ret == 0 && tv != NULL) {
         if (tv->tv_sec >= 1704067200) { // >= 2024-01-01
             ESP_LOGI(TAG, "POSIX settimeofday called -> automatically syncing to hardware RTC (epoch %lld)",
@@ -136,12 +142,14 @@ int __wrap_settimeofday(const struct timeval *tv, const struct timezone *tz)
             hal_rtc_write_chip_epoch(tv->tv_sec);
         }
     }
+#endif
     return ret;
 }
 
 int __wrap_clock_settime(clockid_t clock_id, const struct timespec *tp)
 {
     int ret = __real_clock_settime(clock_id, tp);
+#if BOARD_HAS_RTC_PCF85063A
     if (ret == 0 && clock_id == CLOCK_REALTIME && tp != NULL) {
         if (tp->tv_sec >= 1704067200) { // >= 2024-01-01
             ESP_LOGI(TAG, "POSIX clock_settime called -> automatically syncing to hardware RTC (epoch %lld)",
@@ -149,6 +157,7 @@ int __wrap_clock_settime(clockid_t clock_id, const struct timespec *tp)
             hal_rtc_write_chip_epoch(tp->tv_sec);
         }
     }
+#endif
     return ret;
 }
 
@@ -158,6 +167,7 @@ int __wrap_clock_settime(clockid_t clock_id, const struct timespec *tp)
 
 esp_err_t hal_rtc_init(void)
 {
+#if BOARD_HAS_RTC_PCF85063A
     if (s_rtc_initialized) {
         return ESP_OK;
     }
@@ -190,6 +200,10 @@ esp_err_t hal_rtc_init(void)
     hal_rtc_restore_to_system();
 
     return ESP_OK;
+#else
+    ESP_LOGI(TAG, "Hardware RTC bypassed: relying on internal RTC & SNTP");
+    return ESP_OK;
+#endif
 }
 
 static bool s_sntp_initialized = false;
@@ -268,4 +282,3 @@ bool hal_sntp_is_synced(void)
     }
     return false;
 }
-

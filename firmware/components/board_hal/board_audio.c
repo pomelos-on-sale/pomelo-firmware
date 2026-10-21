@@ -2,16 +2,19 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
-#include "esp_codec_dev.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_pthread.h"
 #include "esp_heap_caps.h"
-#include "driver/i2s_std.h"
-#include "esp_codec_dev_defaults.h"
 
 static const char *TAG = "board_audio";
+
+#if BOARD_HAS_AUDIO_SPEAKER
+
+#include "esp_codec_dev.h"
+#include "driver/i2s_std.h"
+#include "esp_codec_dev_defaults.h"
 
 static esp_codec_dev_handle_t s_spk_codec_dev = NULL;
 static bool s_audio_opened = false;
@@ -198,7 +201,6 @@ esp_err_t hal_audio_open(uint32_t sample_rate, uint8_t channels, uint8_t bits_pe
         }
     }
     // Defensive safety check: ensure adequate internal DMA memory before attempting hardware open/reconfig.
-    // I2S DMA descriptors and buffers are pre-allocated at boot; reconfig only needs minimal headroom.
     size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     size_t largest_dma_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (free_dma < 1024 || largest_dma_block < 512) {
@@ -256,12 +258,10 @@ esp_err_t hal_audio_drain(void)
         audio_unlock();
         return ESP_OK;
     }
-    // Feed a small silence buffer to push hardware FIFO through I2S DMA
     uint8_t silence[1024] = {0};
     esp_codec_dev_write(s_spk_codec_dev, silence, sizeof(silence));
     audio_unlock();
 
-    // Delay briefly to allow DMA pipeline to flush without tail clipping
     vTaskDelay(pdMS_TO_TICKS(50));
     return ESP_OK;
 }
@@ -290,6 +290,49 @@ esp_err_t hal_audio_close(void)
     audio_unlock();
     return ESP_OK;
 }
+
+#else // !BOARD_HAS_AUDIO_SPEAKER
+
+static uint8_t s_null_audio_vol = 75;
+
+esp_err_t hal_audio_init(void)
+{
+    ESP_LOGI(TAG, "Audio hardware bypassed: Null Audio Sink activated");
+    return ESP_OK;
+}
+
+esp_err_t hal_audio_open(uint32_t sample_rate, uint8_t channels, uint8_t bits_per_sample)
+{
+    ESP_LOGI(TAG, "Null Audio stream opened: %u Hz, %u ch, %u-bit",
+             (unsigned)sample_rate, channels, bits_per_sample);
+    return ESP_OK;
+}
+
+esp_err_t hal_audio_write(const void *data, uint32_t len)
+{
+    if (!data || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+esp_err_t hal_audio_drain(void)
+{
+    return ESP_OK;
+}
+
+esp_err_t hal_audio_set_volume(uint8_t volume)
+{
+    s_null_audio_vol = volume > 100 ? 100 : volume;
+    return ESP_OK;
+}
+
+esp_err_t hal_audio_close(void)
+{
+    return ESP_OK;
+}
+
+#endif // BOARD_HAS_AUDIO_SPEAKER
 
 esp_err_t hal_audio_configure_pthread(uint32_t stack_size, bool use_psram)
 {

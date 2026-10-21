@@ -1,12 +1,5 @@
 #include <string.h>
 #include "esp_log.h"
-#include "esp_vfs_fat.h"
-#include "vfs_fat_internal.h"
-#include "diskio_sdmmc.h"
-#include "diskio_impl.h"
-#include "ff.h"
-#include "driver/sdmmc_host.h"
-#include "sdmmc_cmd.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -15,9 +8,19 @@
 #include "board_hal.h"
 #include "board_pins.h"
 
-#define BOARD_SD_MOUNT_POINT "/sdcard"
-
 static const char *TAG = "board_storage";
+
+#if BOARD_HAS_SD_CARD
+
+#include "esp_vfs_fat.h"
+#include "vfs_fat_internal.h"
+#include "diskio_sdmmc.h"
+#include "diskio_impl.h"
+#include "ff.h"
+#include "driver/sdmmc_host.h"
+#include "sdmmc_cmd.h"
+
+#define BOARD_SD_MOUNT_POINT "/sdcard"
 
 static hal_sd_status_t s_sd_status = HAL_SD_STATUS_NOT_INSERTED;
 static hal_sd_card_info_t s_card_info = {0};
@@ -78,13 +81,7 @@ static esp_err_t hal_storage_sd_mount_internal(void)
         return ESP_OK;
     }
 
-    hal_sd_status_t prev_status = s_sd_status;
-
     if (ensure_host_inited() != ESP_OK) {
-        s_sd_status = HAL_SD_STATUS_ERROR;
-        if (s_sd_status != prev_status) {
-            notify_sd_status_changed(s_sd_status);
-        }
         return ESP_FAIL;
     }
 
@@ -95,40 +92,26 @@ static esp_err_t hal_storage_sd_mount_internal(void)
         }
     }
 
-    // Stage 1: Hardware probe via SDMMC protocol (CMD0, ACMD41, CID, CSD)
     esp_err_t probe_ret = sdmmc_card_init(&s_host, s_card);
     if (probe_ret != ESP_OK) {
-        s_sd_status = (probe_ret == ESP_ERR_TIMEOUT || probe_ret == ESP_ERR_NOT_FOUND)
-            ? HAL_SD_STATUS_NOT_INSERTED
-            : HAL_SD_STATUS_ERROR;
-        memset(&s_card_info, 0, sizeof(s_card_info));
-        free(s_card);
-        s_card = NULL;
-        if (s_host.deinit_p) {
-            s_host.deinit_p(s_host.slot);
-        }
-        s_host_inited = false;
-        if (s_sd_status != prev_status) {
+        if (s_sd_status != HAL_SD_STATUS_NOT_INSERTED) {
+            s_sd_status = HAL_SD_STATUS_NOT_INSERTED;
+            memset(&s_card_info, 0, sizeof(s_card_info));
             notify_sd_status_changed(s_sd_status);
         }
         return probe_ret;
     }
 
-    // Physical card successfully detected and initialized
-    memset(&s_card_info, 0, sizeof(s_card_info));
-    snprintf(s_card_info.name, sizeof(s_card_info.name), "%.5s", s_card->cid.name);
+    strncpy(s_card_info.name, s_card->cid.name, sizeof(s_card_info.name) - 1);
     s_card_info.total_bytes = ((uint64_t)s_card->csd.capacity) * s_card->csd.sector_size;
-    s_card_info.serial_number = s_card->cid.serial;
     s_card_info.is_formatted = false;
 
-    // Stage 2: Mount FAT32 filesystem (without auto-formatting to protect user data)
     const esp_vfs_fat_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024,
     };
 
-    // Temporarily suppress diskio_sdmmc errors during probe: an unformatted card is expected to fail mount
     esp_log_level_set("diskio_sdmmc", ESP_LOG_NONE);
     esp_err_t mount_ret = esp_vfs_fat_mount_initialized(s_card, BOARD_SD_MOUNT_POINT, &mount_config);
     esp_log_level_set("diskio_sdmmc", ESP_LOG_ERROR);
@@ -140,10 +123,8 @@ static esp_err_t hal_storage_sd_mount_internal(void)
                  (unsigned long long)(s_card_info.total_bytes / (1024 * 1024)),
                  BOARD_SD_MOUNT_POINT);
     } else {
-        // Hardware card is healthy, but filesystem is unformatted or unsupported (e.g. exFAT)
-        // Clean up partial VFS and diskio registration left behind by failed mount
         BYTE pdrv = ff_diskio_get_pdrv_card(s_card);
-        if (pdrv != 0xff) {
+        if (pdrv != 0xFF) {
             char drv[3] = {(char)('0' + pdrv), ':', 0};
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
@@ -152,15 +133,13 @@ static esp_err_t hal_storage_sd_mount_internal(void)
 
         s_sd_status = HAL_SD_STATUS_UNFORMATTED;
         s_card_info.is_formatted = false;
-        ESP_LOGW(TAG, "SD card (%s, %llu MB) detected, but filesystem is unformatted/unsupported (%s)",
+        ESP_LOGW(TAG, "SD card (%s, %llu MB) detected but unformatted (err=%s, 0x%x)",
                  s_card_info.name,
                  (unsigned long long)(s_card_info.total_bytes / (1024 * 1024)),
-                 esp_err_to_name(mount_ret));
+                 esp_err_to_name(mount_ret), mount_ret);
     }
 
-    if (s_sd_status != prev_status) {
-        notify_sd_status_changed(s_sd_status);
-    }
+    notify_sd_status_changed(s_sd_status);
     return mount_ret;
 }
 
@@ -172,7 +151,7 @@ static esp_err_t hal_storage_sd_unmount_internal(void)
         s_host_inited = false;
     } else if (s_sd_status == HAL_SD_STATUS_UNFORMATTED && s_card != NULL) {
         BYTE pdrv = ff_diskio_get_pdrv_card(s_card);
-        if (pdrv != 0xff) {
+        if (pdrv != 0xFF) {
             char drv[3] = {(char)('0' + pdrv), ':', 0};
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
@@ -181,54 +160,16 @@ static esp_err_t hal_storage_sd_unmount_internal(void)
         free(s_card);
         s_card = NULL;
         if (s_host.deinit_p) {
-            s_host.deinit_p(s_host.slot);
+            (*s_host.deinit_p)(s_host.slot);
+        } else if (s_host.deinit) {
+            (*s_host.deinit)();
         }
         s_host_inited = false;
     }
+
     s_sd_status = HAL_SD_STATUS_NOT_INSERTED;
     memset(&s_card_info, 0, sizeof(s_card_info));
     notify_sd_status_changed(s_sd_status);
-    ESP_LOGI(TAG, "SD card unmounted / removed");
-    return ESP_OK;
-}
-
-esp_err_t hal_storage_sd_mount(void)
-{
-    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-    esp_err_t ret = hal_storage_sd_mount_internal();
-    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-    return ret;
-}
-
-esp_err_t hal_storage_sd_unmount(void)
-{
-    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-    esp_err_t ret = hal_storage_sd_unmount_internal();
-    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-    return ret;
-}
-
-hal_sd_status_t hal_storage_sd_get_status(void)
-{
-    hal_sd_status_t status;
-    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-    status = s_sd_status;
-    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-    return status;
-}
-
-esp_err_t hal_storage_sd_get_info(hal_sd_card_info_t *out_info)
-{
-    if (!out_info) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-    if (s_sd_status == HAL_SD_STATUS_NOT_INSERTED) {
-        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-        return ESP_ERR_NOT_FOUND;
-    }
-    *out_info = s_card_info;
-    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
     return ESP_OK;
 }
 
@@ -242,35 +183,27 @@ static esp_err_t hal_storage_sd_format_internal(void)
     }
 
     if (s_card == NULL) {
-        ESP_LOGE(TAG, "Card handle is NULL");
+        ESP_LOGE(TAG, "Cannot format: s_card handle is null");
         return ESP_ERR_INVALID_STATE;
     }
 
-    // 1. If currently mounted, cleanly unmount and re-probe card handle
     if (s_sd_status == HAL_SD_STATUS_MOUNTED) {
         esp_vfs_fat_sdcard_unmount(BOARD_SD_MOUNT_POINT, s_card);
         s_card = NULL;
         s_host_inited = false;
         if (ensure_host_inited() != ESP_OK) {
-            s_sd_status = HAL_SD_STATUS_ERROR;
-            notify_sd_status_changed(s_sd_status);
             return ESP_FAIL;
         }
         s_card = (sdmmc_card_t *)malloc(sizeof(sdmmc_card_t));
-        if (s_card == NULL) {
-            return ESP_ERR_NO_MEM;
-        }
-        esp_err_t probe = sdmmc_card_init(&s_host, s_card);
-        if (probe != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to re-probe SD card after unmount: %s", esp_err_to_name(probe));
-            s_sd_status = HAL_SD_STATUS_ERROR;
+        if (!s_card || sdmmc_card_init(&s_host, s_card) != ESP_OK) {
+            ESP_LOGE(TAG, "Re-probe card before format failed");
+            s_sd_status = HAL_SD_STATUS_NOT_INSERTED;
             notify_sd_status_changed(s_sd_status);
-            return probe;
+            return ESP_FAIL;
         }
-    } else {
-        // Clean any leftover diskio or VFS registration from failed mount probe
+    } else if (s_sd_status == HAL_SD_STATUS_UNFORMATTED) {
         BYTE pdrv = ff_diskio_get_pdrv_card(s_card);
-        if (pdrv != 0xff) {
+        if (pdrv != 0xFF) {
             char drv[3] = {(char)('0' + pdrv), ':', 0};
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
@@ -278,42 +211,44 @@ static esp_err_t hal_storage_sd_format_internal(void)
         esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
     }
 
-    // 2. Register SDMMC driver to FatFS drive 0
-    BYTE pdrv = 0;
+    BYTE pdrv = 0xFF;
+    if (ff_diskio_get_drive(&pdrv) != ESP_OK || pdrv == 0xFF) {
+        ESP_LOGE(TAG, "ff_diskio_get_drive failed");
+        return ESP_ERR_NO_MEM;
+    }
     ff_diskio_register_sdmmc(pdrv, s_card);
 
-    // 3. Partition card (MBR with 1 single FAT32 partition taking 100% of card)
-    ESP_LOGI(TAG, "Writing fresh partition table (MBR) to SD card...");
-    esp_vfs_fat_drive_divide_arr_t partitions = {100, 0, 0, 0};
-    esp_err_t part_err = esp_vfs_fat_partition_drive(pdrv, partitions);
-    if (part_err != ESP_OK) {
-        ESP_LOGE(TAG, "Partitioning failed: %s (0x%x)", esp_err_to_name(part_err), part_err);
+    char drv[3] = {(char)('0' + pdrv), ':', 0};
+    FATFS fs;
+    FRESULT fr = f_mount(&fs, drv, 0);
+    if (fr != FR_OK) {
+        ESP_LOGE(TAG, "f_mount for format failed: %d", fr);
         ff_diskio_unregister(pdrv);
-        s_sd_status = HAL_SD_STATUS_UNFORMATTED;
-        notify_sd_status_changed(s_sd_status);
-        return part_err;
+        return ESP_FAIL;
     }
 
-    // 4. Format partition as FAT32
-    ESP_LOGI(TAG, "Formatting partition to FAT32...");
-    const esp_vfs_fat_mount_config_t format_cfg = {
-        .format_if_mount_failed = false,
-        .max_files = 5,
-        .allocation_unit_size = 16 * 1024,
+    MKFS_PARM opt = {
+        .fmt = FM_FAT32,
+        .n_fat = 1,
+        .align = 0,
+        .n_root = 0,
+        .au_size = 16 * 1024,
     };
-    esp_err_t fmt_err = esp_vfs_fat_format_drive(pdrv, &format_cfg);
-    if (fmt_err != ESP_OK) {
-        ESP_LOGE(TAG, "FAT32 format failed: %s (0x%x)", esp_err_to_name(fmt_err), fmt_err);
+    uint8_t work_buf[FF_MAX_SS];
+    ESP_LOGI(TAG, "Executing f_mkfs (FAT32, 16KB cluster)...");
+    fr = f_mkfs(drv, &opt, work_buf, sizeof(work_buf));
+    if (fr != FR_OK) {
+        ESP_LOGE(TAG, "f_mkfs failed: %d", fr);
+        f_mount(0, drv, 0);
         ff_diskio_unregister(pdrv);
         s_sd_status = HAL_SD_STATUS_UNFORMATTED;
         notify_sd_status_changed(s_sd_status);
-        return fmt_err;
+        return ESP_FAIL;
     }
 
-    // 5. Release temporary diskio registration
+    f_mount(0, drv, 0);
     ff_diskio_unregister(pdrv);
 
-    // 6. Mount the freshly formatted card
     ESP_LOGI(TAG, "Mounting formatted SD card to %s...", BOARD_SD_MOUNT_POINT);
     const esp_vfs_fat_mount_config_t mount_cfg = {
         .format_if_mount_failed = false,
@@ -324,9 +259,9 @@ static esp_err_t hal_storage_sd_format_internal(void)
     if (mount_ret != ESP_OK) {
         ESP_LOGE(TAG, "Mount after format failed: %s (0x%x)", esp_err_to_name(mount_ret), mount_ret);
         BYTE cur_pdrv = ff_diskio_get_pdrv_card(s_card);
-        if (cur_pdrv != 0xff) {
-            char drv[3] = {(char)('0' + cur_pdrv), ':', 0};
-            f_mount(0, drv, 0);
+        if (cur_pdrv != 0xFF) {
+            char cur_drv[3] = {(char)('0' + cur_pdrv), ':', 0};
+            f_mount(0, cur_drv, 0);
             ff_diskio_unregister(cur_pdrv);
         }
         esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
@@ -335,8 +270,8 @@ static esp_err_t hal_storage_sd_format_internal(void)
         return mount_ret;
     }
 
-    s_card_info.is_formatted = true;
     s_sd_status = HAL_SD_STATUS_MOUNTED;
+    s_card_info.is_formatted = true;
     ESP_LOGI(TAG, "SD card (%s, %llu MB) successfully formatted and mounted at %s",
              s_card_info.name,
              (unsigned long long)(s_card_info.total_bytes / (1024 * 1024)),
@@ -345,16 +280,116 @@ static esp_err_t hal_storage_sd_format_internal(void)
     return ESP_OK;
 }
 
+static void sd_monitor_task(void *arg)
+{
+    ESP_LOGI(TAG, "Storage auto-detect monitor task started on Core 0");
+
+    esp_log_level_set("sdmmc_common", ESP_LOG_NONE);
+    esp_log_level_set("sdmmc_req", ESP_LOG_NONE);
+    esp_log_level_set("sdmmc_cmd", ESP_LOG_NONE);
+    esp_log_level_set("vfs_fat_sdmmc", ESP_LOG_NONE);
+    esp_log_level_set("SD_HOST", ESP_LOG_NONE);
+
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    ensure_host_inited();
+    hal_storage_sd_mount_internal();
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+        if (s_sd_status == HAL_SD_STATUS_MOUNTED || s_sd_status == HAL_SD_STATUS_UNFORMATTED) {
+            if (s_card != NULL) {
+                esp_err_t err = sdmmc_get_status(s_card);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "SD card disconnected or removed (%s), unmounting...", esp_err_to_name(err));
+                    hal_storage_sd_unmount_internal();
+                }
+            }
+        } else if (s_sd_status == HAL_SD_STATUS_NOT_INSERTED) {
+            hal_storage_sd_mount_internal();
+        }
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+    }
+}
+
+#endif // BOARD_HAS_SD_CARD
+
+/* ---------------------------------------------------------------------------
+ * Public MicroSD Storage API Implementation
+ * ------------------------------------------------------------------------- */
+
+hal_sd_status_t hal_storage_sd_get_status(void)
+{
+#if BOARD_HAS_SD_CARD
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    hal_sd_status_t status = s_sd_status;
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+    return status;
+#else
+    return HAL_SD_STATUS_NOT_INSERTED;
+#endif
+}
+
+esp_err_t hal_storage_sd_get_info(hal_sd_card_info_t *out_info)
+{
+#if BOARD_HAS_SD_CARD
+    if (!out_info) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    if (s_sd_status == HAL_SD_STATUS_NOT_INSERTED) {
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+        return ESP_ERR_NOT_FOUND;
+    }
+    memcpy(out_info, &s_card_info, sizeof(hal_sd_card_info_t));
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t hal_storage_sd_mount(void)
+{
+#if BOARD_HAS_SD_CARD
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    esp_err_t ret = hal_storage_sd_mount_internal();
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+    return ret;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t hal_storage_sd_unmount(void)
+{
+#if BOARD_HAS_SD_CARD
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    esp_err_t ret = hal_storage_sd_unmount_internal();
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+    return ret;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
 esp_err_t hal_storage_sd_format(void)
 {
+#if BOARD_HAS_SD_CARD
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
     esp_err_t ret = hal_storage_sd_format_internal();
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
     return ret;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free_bytes)
 {
+#if BOARD_HAS_SD_CARD
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
     if (s_sd_status != HAL_SD_STATUS_MOUNTED) {
         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
@@ -372,49 +407,14 @@ esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free
     }
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
     return ret;
-}
-
-static void sd_monitor_task(void *arg)
-{
-    ESP_LOGI(TAG, "Storage auto-detect monitor task started on Core 0");
-
-    // Suppress noisy logs during background probe when card is not inserted
-    esp_log_level_set("sdmmc_common", ESP_LOG_NONE);
-    esp_log_level_set("sdmmc_req", ESP_LOG_NONE);
-    esp_log_level_set("sdmmc_cmd", ESP_LOG_NONE);
-    esp_log_level_set("vfs_fat_sdmmc", ESP_LOG_NONE);
-    esp_log_level_set("SD_HOST", ESP_LOG_NONE);
-
-    // Initial boot-time probe/mount
-    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-    ensure_host_inited();
-    hal_storage_sd_mount_internal();
-    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-
-    // Periodic check loop (every 5 seconds)
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-
-        if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
-        if (s_sd_status == HAL_SD_STATUS_MOUNTED || s_sd_status == HAL_SD_STATUS_UNFORMATTED) {
-            // Health check: verify SD card is still physically present and responding
-            if (s_card != NULL) {
-                esp_err_t err = sdmmc_get_status(s_card);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "SD card disconnected or removed (%s), unmounting...", esp_err_to_name(err));
-                    hal_storage_sd_unmount_internal();
-                }
-            }
-        } else if (s_sd_status == HAL_SD_STATUS_NOT_INSERTED) {
-            // Soft-probe: check if card was inserted after boot
-            hal_storage_sd_mount_internal();
-        }
-        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
-    }
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 esp_err_t hal_storage_sd_init(void)
 {
+#if BOARD_HAS_SD_CARD
     if (s_monitor_task != NULL) {
         return ESP_OK;
     }
@@ -426,7 +426,6 @@ esp_err_t hal_storage_sd_init(void)
         }
     }
 
-    // Pinned to Core 0 with low priority 1, leaving Core 1 entirely dedicated to UI
     BaseType_t res = xTaskCreatePinnedToCore(
         sd_monitor_task,
         "sd_mon",
@@ -438,6 +437,10 @@ esp_err_t hal_storage_sd_init(void)
     );
 
     return (res == pdPASS) ? ESP_OK : ESP_FAIL;
+#else
+    ESP_LOGI(TAG, "MicroSD card slot bypassed: SD detection disabled");
+    return ESP_OK;
+#endif
 }
 
 /* ---------------------------------------------------------------------------
@@ -449,12 +452,9 @@ esp_err_t hal_nvs_get_blob(const char *part, const char *ns, const char *key, vo
     if (!ns || !key || !inout_len) {
         return ESP_ERR_INVALID_ARG;
     }
-    nvs_handle_t handle;
     const char *p = (part && part[0]) ? part : "nvs_app";
+    nvs_handle_t handle;
     esp_err_t err = nvs_open_from_partition(p, ns, NVS_READONLY, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
-        err = nvs_open(ns, NVS_READONLY, &handle);
-    }
     if (err != ESP_OK) {
         return err;
     }
@@ -468,12 +468,9 @@ esp_err_t hal_nvs_set_blob(const char *part, const char *ns, const char *key, co
     if (!ns || !key || !data) {
         return ESP_ERR_INVALID_ARG;
     }
-    nvs_handle_t handle;
     const char *p = (part && part[0]) ? part : "nvs_app";
+    nvs_handle_t handle;
     esp_err_t err = nvs_open_from_partition(p, ns, NVS_READWRITE, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
-        err = nvs_open(ns, NVS_READWRITE, &handle);
-    }
     if (err != ESP_OK) {
         return err;
     }
@@ -490,12 +487,9 @@ esp_err_t hal_nvs_erase_key(const char *part, const char *ns, const char *key)
     if (!ns || !key) {
         return ESP_ERR_INVALID_ARG;
     }
-    nvs_handle_t handle;
     const char *p = (part && part[0]) ? part : "nvs_app";
+    nvs_handle_t handle;
     esp_err_t err = nvs_open_from_partition(p, ns, NVS_READWRITE, &handle);
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_PART_NOT_FOUND) {
-        err = nvs_open(ns, NVS_READWRITE, &handle);
-    }
     if (err != ESP_OK) {
         return err;
     }
@@ -535,4 +529,3 @@ esp_err_t hal_nvs_dump_all(const char *part, hal_nvs_dump_cb cb, void *ctx)
     }
     return ESP_OK;
 }
-
