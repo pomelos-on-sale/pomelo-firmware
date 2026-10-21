@@ -48,6 +48,8 @@ static esp_err_t audio_i2s_init(void)
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(BOARD_PIN_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
+    chan_cfg.dma_desc_num = 8;
+    chan_cfg.dma_frame_num = 512;
     esp_err_t ret = i2s_new_channel(&chan_cfg, &s_i2s_tx_chan, &s_i2s_rx_chan);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
@@ -147,8 +149,9 @@ static esp_codec_dev_handle_t audio_codec_speaker_init(void)
     }
 
     esp_codec_dev_hw_gain_t gain = {
-        .pa_voltage = 5.0,
+        .pa_voltage = 3.3,
         .codec_dac_voltage = 3.3,
+        .pa_gain = 0.0, // Unity hardware gain (0.0 dB) to preserve 1:1 DAC dynamic range
     };
 
     es8311_codec_cfg_t es8311_cfg = {
@@ -196,6 +199,24 @@ esp_err_t hal_audio_init(void)
         audio_unlock();
         return ESP_FAIL;
     }
+
+    // Configure calibrated logarithmic volume curve:
+    // 100% maps precisely to 0.0 dB (ES8311 REG 0x32 = 0xBF, Unity Gain, no digital clipping),
+    // 75% maps to -2.0 dB providing high acoustic output without overdriving micro-speaker.
+    static esp_codec_dev_vol_map_t s_vol_map[] = {
+        { .vol = 0,   .db_value = -96.0f },
+        { .vol = 10,  .db_value = -24.0f },
+        { .vol = 25,  .db_value = -14.0f },
+        { .vol = 50,  .db_value = -6.0f },
+        { .vol = 75,  .db_value = -2.0f },
+        { .vol = 100, .db_value = 0.0f },
+    };
+    esp_codec_dev_vol_curve_t curve = {
+        .vol_map = s_vol_map,
+        .count = sizeof(s_vol_map) / sizeof(s_vol_map[0]),
+    };
+    esp_codec_dev_set_vol_curve(s_spk_codec_dev, &curve);
+
     esp_codec_dev_set_out_vol(s_spk_codec_dev, 75);
     ESP_LOGI(TAG, "ES8311 audio speaker codec initialized successfully.");
     audio_unlock();
@@ -269,11 +290,12 @@ esp_err_t hal_audio_drain(void)
         audio_unlock();
         return ESP_OK;
     }
-    uint8_t silence[1024] = {0};
+    // Flush remaining samples out of the I2S DMA pipeline with 2048 bytes of silence
+    uint8_t silence[2048] = {0};
     esp_codec_dev_write(s_spk_codec_dev, silence, sizeof(silence));
     audio_unlock();
 
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(80));
     return ESP_OK;
 }
 
@@ -354,6 +376,7 @@ esp_err_t hal_audio_configure_pthread(uint32_t stack_size, bool use_psram)
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
     cfg.stack_size = stack_size;
     cfg.thread_name = "audio_worker";
+    cfg.prio = 12; // Elevated real-time priority (higher than UI priority 5) to eliminate DMA starvation
     if (use_psram) {
         cfg.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     } else {

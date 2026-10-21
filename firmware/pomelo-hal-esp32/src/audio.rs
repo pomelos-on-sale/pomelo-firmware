@@ -171,6 +171,147 @@ impl EspAudio {
         self.stop();
 
         let ext = format_hint.unwrap_or("mp3").to_string();
+
+        // For sound effects and short notification clips (<= 256KB), pre-decode the entire audio into
+        // raw PCM in PSRAM and perform peak normalization. This guarantees:
+        // 1. Zero real-time IMDCT/Huffman CPU decode jitter during playback (100% immune to UI rendering / Wi-Fi stalls)
+        // 2. High, clean loudness for quiet sound assets without digital clipping
+        if bytes.len() <= 256 * 1024 {
+            let decoder = pomelo_hal::AudioDecoder::from_bytes(bytes.to_vec(), Some(&ext))?;
+            let (meta, mut pcm) = decoder.decode_all()?;
+
+            // Analyze peak amplitude in PCM samples (16-bit signed LE):
+            let mut peak_val = 0i16;
+            for chunk in pcm.chunks_exact(2) {
+                let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                let abs_s = if s == i16::MIN { i16::MAX } else { s.abs() };
+                if abs_s > peak_val {
+                    peak_val = abs_s;
+                }
+            }
+
+            // Normalization: if the audio asset was recorded quietly (e.g. sound-6 peak is only 9476 / -10.8 dBFS),
+            // safely boost the gain so the peak reaches 30000 (-0.76 dBFS true peak safety margin).
+            if peak_val > 0 && peak_val < 28000 {
+                let target = 30000.0f32;
+                let scale = (target / peak_val as f32).min(4.0f32);
+                if scale > 1.05 {
+                    println!(
+                        "[EspAudio] Pre-decoded {} samples ({:.2}s). Normalizing peak from {} to {} (+{:.1} dB)",
+                        pcm.len() / 2, meta.duration_secs, peak_val, target as i16, 20.0 * scale.log10()
+                    );
+                    for chunk in pcm.chunks_exact_mut(2) {
+                        let s = i16::from_le_bytes([chunk[0], chunk[1]]) as f32;
+                        let boosted = (s * scale).clamp(-32767.0, 32767.0).round() as i16;
+                        let le = boosted.to_le_bytes();
+                        chunk[0] = le[0];
+                        chunk[1] = le[1];
+                    }
+                }
+            }
+
+            println!(
+                "[EspAudio] Audio meta (pre-decoded): {} Hz, {} ch, {}-bit, duration={:.2}s, pcm_bytes={}",
+                meta.sample_rate, meta.channels, meta.bits_per_sample, meta.duration_secs, pcm.len()
+            );
+
+            let ret = unsafe {
+                ffi::hal_audio_open(
+                    meta.sample_rate,
+                    meta.channels,
+                    meta.bits_per_sample,
+                )
+            };
+            if ret != 0 {
+                eprintln!("[EspAudio] ffi::hal_audio_open failed with error code: {ret}");
+                return Err(HalError::Internal(ret));
+            }
+
+            unsafe {
+                let _ = ffi::hal_audio_set_volume(self.volume);
+            }
+
+            let control = Arc::new(PlaybackControl {
+                is_playing: AtomicBool::new(true),
+                is_paused: AtomicBool::new(false),
+                stop_requested: AtomicBool::new(false),
+                bytes_played: AtomicU32::new(0),
+            });
+
+            let control_clone = Arc::clone(&control);
+            let pcm_arc = Arc::new(pcm);
+
+            unsafe {
+                let _ = ffi::hal_audio_configure_pthread(32768, true);
+            }
+
+            let thread_res = std::thread::Builder::new()
+                .name("audio_worker".into())
+                .stack_size(32768)
+                .spawn(move || {
+                    println!("[EspAudio] audio_worker started for pre-decoded PCM (loop={is_loop})");
+                    'outer: loop {
+                        let mut offset = 0;
+                        while offset < pcm_arc.len() {
+                            if control_clone.stop_requested.load(Ordering::Relaxed) {
+                                break 'outer;
+                            }
+                            if control_clone.is_paused.load(Ordering::Relaxed) {
+                                std::thread::sleep(std::time::Duration::from_millis(15));
+                                continue;
+                            }
+                            let chunk_size = (pcm_arc.len() - offset).min(4096);
+                            let ret = unsafe {
+                                ffi::hal_audio_write(pcm_arc[offset..].as_ptr(), chunk_size as u32)
+                            };
+                            if ret != 0 {
+                                std::thread::sleep(std::time::Duration::from_millis(2));
+                            } else {
+                                control_clone.bytes_played.fetch_add(chunk_size as u32, Ordering::Relaxed);
+                                offset += chunk_size;
+                            }
+                        }
+
+                        if !is_loop || control_clone.stop_requested.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
+                    }
+
+                    // Flush DMA pipeline before closing
+                    println!("[EspAudio] audio_worker reached EOF, draining DMA buffer...");
+                    unsafe {
+                        ffi::hal_audio_drain();
+                        ffi::hal_audio_close();
+                    }
+                    control_clone.is_playing.store(false, Ordering::Relaxed);
+                    println!(
+                        "[EspAudio] playback thread finished, total bytes played: {}",
+                        control_clone.bytes_played.load(Ordering::Relaxed)
+                    );
+                });
+
+            unsafe {
+                let _ = ffi::hal_audio_configure_pthread(0, false);
+            }
+
+            let handle = match thread_res {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("[EspAudio] failed to spawn audio_worker thread: {e}");
+                    unsafe {
+                        ffi::hal_audio_close();
+                    }
+                    return Err(HalError::Io(format!("spawn audio_worker failed: {e}")));
+                }
+            };
+
+            self.meta = Some(meta);
+            self.control = Some(control);
+            self.worker_handle = Some(handle);
+            return Ok(meta);
+        }
+
+        // Fallback for long streaming audio (> 256KB)
         let bytes_arc = Arc::new(bytes.to_vec());
         let bytes_clone = Arc::clone(&bytes_arc);
         let ext_clone = ext.clone();
@@ -208,11 +349,6 @@ impl EspAudio {
 
         let control_clone = Arc::clone(&control);
 
-        // Configure pthread worker stack to 64KB in PSRAM:
-        // Symphonia's nested frame parsing, Huffman lookup, and DCT synthesis require ample
-        // stack space. We configure esp_pthread to allocate the thread stack from PSRAM
-        // (MALLOC_CAP_SPIRAM) and pass .stack_size(65536) explicitly so Rust std sets
-        // pthread_attr_setstacksize without falling back to ESP-IDF's default 3KB internal stack.
         unsafe {
             let _ = ffi::hal_audio_configure_pthread(65536, true);
         }
@@ -222,7 +358,7 @@ impl EspAudio {
             .stack_size(65536)
             .spawn(move || {
                 println!("[EspAudio] audio_worker thread started (loop={is_loop})");
-                let mut buf = vec![0u8; 2048];
+                let mut buf = vec![0u8; 8192];
                 loop {
                     if control_clone.stop_requested.load(Ordering::Relaxed) {
                         println!("[EspAudio] audio_worker received stop request");
