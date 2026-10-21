@@ -85,9 +85,7 @@ static esp_err_t audio_i2s_init(void)
     }
 
     // ES8311 requires MCLK to be stable for ~10ms before its internal PLL locks
-    // and the I2C control interface becomes responsive. Without this delay the
-    // first I2C probe issued by es8311_codec_new() races the PLL startup and
-    // produces "I2C_If: Fail to read/write dev 0x18" / "ES8311: Open fail".
+    // and the I2C control interface becomes responsive.
     vTaskDelay(pdMS_TO_TICKS(20));
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -130,9 +128,16 @@ static esp_codec_dev_handle_t audio_codec_speaker_init(void)
 
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 
+    // Note: esp_codec_dev's I2C driver expects an 8-bit I2C address and internally
+    // does (addr >> 1) to configure the 7-bit address for i2c_master_bus_add_device.
+    uint8_t codec_addr = BOARD_PIN_AUDIO_ES8311_ADDR;
+    if (codec_addr < 0x20) {
+        codec_addr <<= 1;
+    }
+
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port = BOARD_PIN_I2C_NUM,
-        .addr = BOARD_PIN_AUDIO_ES8311_ADDR,
+        .addr = codec_addr,
         .bus_handle = i2c_bus,
     };
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);

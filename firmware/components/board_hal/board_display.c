@@ -85,6 +85,7 @@ void hal_display_wait_vsync(void)
 #define CHUNK_STRIP_WIDTH_DEFAULT 16
 static int s_chunk_strip_width = CHUNK_STRIP_WIDTH_DEFAULT;
 static uint16_t *s_dma_chunk[2] = {NULL, NULL};
+static uint8_t s_display_brightness = 100;
 
 // =============================================================================
 // CO5300 AMOLED Panel Initialization Command Sequence
@@ -354,10 +355,11 @@ void hal_display_draw_bitmap(int32_t x1, int32_t y1, int32_t x2, int32_t y2, con
         lcd_cmd &= 0xff;
         lcd_cmd <<= 8;
         lcd_cmd |= 0x02 << 24;
-        uint8_t param = 255;
+        uint8_t param = (uint8_t)(((uint32_t)s_display_brightness * 255 + 50) / 100);
         esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
         s_display_active = true;
-        ESP_LOGI(TAG, "AMOLED display output enabled on first frame.");
+        ESP_LOGI(TAG, "AMOLED display output enabled on first frame (brightness: %u%%).",
+                 (unsigned)s_display_brightness);
     }
 }
 
@@ -380,7 +382,7 @@ void hal_display_set_power(bool on)
             lcd_cmd &= 0xff;
             lcd_cmd <<= 8;
             lcd_cmd |= 0x02 << 24;
-            uint8_t param = 255;
+            uint8_t param = (uint8_t)(((uint32_t)s_display_brightness * 255 + 50) / 100);
             esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
             vTaskDelay(pdMS_TO_TICKS(20));
         }
@@ -405,5 +407,27 @@ void hal_display_set_screen_off_timeout_ms(uint32_t timeout_ms)
 uint32_t hal_display_get_screen_off_timeout_ms(void)
 {
     return s_screen_off_timeout_ms;
+}
+
+esp_err_t hal_display_set_brightness(uint8_t percent)
+{
+    if (percent > 100) percent = 100;
+    if (percent < 10)  percent = 10;
+    s_display_brightness = percent;
+
+    if (s_io_handle && s_display_active) {
+        uint32_t lcd_cmd = 0x51;
+        lcd_cmd &= 0xff;
+        lcd_cmd <<= 8;
+        lcd_cmd |= 0x02 << 24;
+        uint8_t param = (uint8_t)(((uint32_t)percent * 255 + 50) / 100);
+        return esp_lcd_panel_io_tx_param(s_io_handle, lcd_cmd, &param, 1);
+    }
+    return ESP_OK;
+}
+
+uint8_t hal_display_get_brightness(void)
+{
+    return s_display_brightness;
 }
 

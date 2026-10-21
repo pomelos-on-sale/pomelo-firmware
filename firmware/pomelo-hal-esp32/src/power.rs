@@ -118,6 +118,23 @@ impl PowerBackend for EspPower {
     }
 
     #[inline]
+    fn set_display_brightness(&mut self, percent: u8) -> Result<(), HalError> {
+        extern "C" {
+            fn hal_display_set_brightness(percent: u8) -> i32;
+        }
+        let _ = unsafe { hal_display_set_brightness(percent) };
+        Ok(())
+    }
+
+    #[inline]
+    fn display_brightness(&self) -> Result<u8, HalError> {
+        extern "C" {
+            fn hal_display_get_brightness() -> u8;
+        }
+        Ok(unsafe { hal_display_get_brightness() })
+    }
+
+    #[inline]
     fn reboot(&mut self) -> Result<(), HalError> {
         unsafe { ffi::hal_power_reboot() };
         Ok(())

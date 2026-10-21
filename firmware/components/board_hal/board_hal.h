@@ -57,6 +57,17 @@ void hal_display_set_screen_off_timeout_ms(uint32_t timeout_ms);
 uint32_t hal_display_get_screen_off_timeout_ms(void);
 
 /**
+ * @brief Set display brightness level (10..100%).
+ * Values below 10% are clamped to 10% to prevent total screen blackout.
+ */
+esp_err_t hal_display_set_brightness(uint8_t percent);
+
+/**
+ * @brief Get current display brightness level (10..100%).
+ */
+uint8_t hal_display_get_brightness(void);
+
+/**
  * @brief Poll touch point. Returns true if touched, false if released.
  */
 bool hal_touch_get_point(int32_t *out_x, int32_t *out_y);

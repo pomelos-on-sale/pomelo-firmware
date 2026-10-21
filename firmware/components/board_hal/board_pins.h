@@ -56,7 +56,8 @@
 #define BOARD_PIN_I2S_DIN           GPIO_NUM_10
 #define BOARD_PIN_I2S_MCLK          GPIO_NUM_42
 #define BOARD_PIN_AUDIO_PA          GPIO_NUM_46
-#define BOARD_PIN_AUDIO_ES8311_ADDR 0x18
+// 7-bit 物理 I2C 地址为 0x18；但 esp_codec_dev 的 i2c_ctrl 使用 8-bit 地址规范 (0x30)，内部会执行 (addr >> 1)
+#define BOARD_PIN_AUDIO_ES8311_ADDR (0x18 << 1) // 0x30 (ES8311_CODEC_DEFAULT_ADDR)
 
 // =============================================================================
 // 4. 电源管理与 RTC 主 I2C 总线引脚 (AXP2101 PMIC & PCF85063A RTC)
