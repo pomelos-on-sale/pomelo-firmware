@@ -1,3 +1,5 @@
 dependencies:
-  waveshare/esp32_s3_touch_amoled_2_16: ^2.0.1
+  waveshare/esp_lcd_touch_cst9217: '*'
   waveshare/pcf85063a: '*'
+  espressif/esp_codec_dev: '*'
+  espressif/esp_lcd_co5300: '*'

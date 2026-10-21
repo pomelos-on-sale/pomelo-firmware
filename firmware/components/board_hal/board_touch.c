@@ -1,9 +1,8 @@
 #include "board_hal_internal.h"
 #include "esp_log.h"
 #include "esp_lcd_touch.h"
-#include "bsp/esp-bsp.h"
-#include "bsp/display.h"
-#include "bsp/touch.h"
+#include "esp_lcd_touch_cst9217.h"
+#include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -167,15 +166,42 @@ esp_err_t board_touch_init(void)
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Initializing CST816/9217 touch controller...");
-    bsp_display_cfg_t touch_cfg = {0};
-    touch_cfg.touch_flags.swap_xy = 1;
-    touch_cfg.touch_flags.mirror_x = 0;
-    touch_cfg.touch_flags.mirror_y = 1;
+    ESP_LOGI(TAG, "Initializing CST9217 touch controller...");
 
-    esp_err_t ret = bsp_touch_new(&touch_cfg, &s_touch_handle);
+    i2c_master_bus_handle_t i2c_bus = hal_i2c_get_master_bus();
+    if (!i2c_bus) {
+        ESP_LOGE(TAG, "Failed to obtain shared I2C master bus for touch");
+        return ESP_FAIL;
+    }
+
+    const esp_lcd_touch_config_t tp_cfg = {
+        .x_max = BOARD_DISPLAY_WIDTH,
+        .y_max = BOARD_DISPLAY_HEIGHT,
+        .rst_gpio_num = BOARD_PIN_TOUCH_RST,
+        .int_gpio_num = BOARD_PIN_TOUCH_INT,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+        .flags = {
+            .swap_xy = 1,
+            .mirror_x = 0,
+            .mirror_y = 1,
+        },
+    };
+
+    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_CST9217_CONFIG();
+    tp_io_config.scl_speed_hz = 400000;
+    esp_err_t ret = esp_lcd_new_panel_io_i2c(i2c_bus, &tp_io_config, &tp_io_handle);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "bsp_touch_new warning: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "esp_lcd_new_panel_io_i2c failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_lcd_touch_new_i2c_cst9217(tp_io_handle, &tp_cfg, &s_touch_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_touch_new_i2c_cst9217 warning: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -259,13 +285,6 @@ bool hal_touch_wait_event(hal_touch_event_t *out_event, uint32_t timeout_ms)
     }
     TickType_t ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
     return xQueueReceive(s_touch_event_queue, out_event, ticks) == pdTRUE;
-}
-
-void hal_touch_resume(void)
-{
-    if (s_touch_sem != NULL) {
-        xSemaphoreGive(s_touch_sem);
-    }
 }
 
 void hal_touch_drain(void)

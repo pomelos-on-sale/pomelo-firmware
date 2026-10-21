@@ -1,5 +1,7 @@
 #include "board_hal_internal.h"
 #include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,6 +51,32 @@ char *realpath(const char *path, char *resolved_path)
     return resolved_path;
 }
 
+static i2c_master_bus_handle_t s_i2c_master_bus = NULL;
+
+i2c_master_bus_handle_t hal_i2c_get_master_bus(void)
+{
+    if (s_i2c_master_bus != NULL) {
+        return s_i2c_master_bus;
+    }
+
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = BOARD_PIN_I2C_NUM,
+        .sda_io_num = BOARD_PIN_I2C_SDA,
+        .scl_io_num = BOARD_PIN_I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &s_i2c_master_bus);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create shared I2C master bus: %s", esp_err_to_name(ret));
+        return NULL;
+    }
+    ESP_LOGI(TAG, "Shared I2C master bus initialized (SDA: GPIO%d, SCL: GPIO%d, Port: %d)",
+             BOARD_PIN_I2C_SDA, BOARD_PIN_I2C_SCL, BOARD_PIN_I2C_NUM);
+    return s_i2c_master_bus;
+}
+
 static void board_bg_worker_task(void *arg)
 {
     ESP_LOGI(TAG, "Background worker task started on Core %d", xPortGetCoreID());
@@ -89,11 +117,18 @@ esp_err_t board_hal_init(void)
         nvs_flash_init_partition("nvs_app");
     }
 
+    // 0.1. Initialize TCP/IP stack (LwIP) and default event loop for networking
+    esp_netif_init();
+    esp_event_loop_create_default();
+
     // 0.5. Initialize unified hardware event queue
     hal_event_init();
 
     // 0.6. Initialize global GPIO ISR service for buttons and peripherals
     gpio_install_isr_service(0);
+
+    // 0.7. Initialize shared I2C master bus for PMIC, RTC, and Touch
+    hal_i2c_get_master_bus();
 
     // 1. Initialize PMIC power management first to ensure power hold and display rail (~4ms)
     ESP_LOGI(TAG, "Initializing AXP2101 Power Management IC...");

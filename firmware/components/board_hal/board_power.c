@@ -7,7 +7,6 @@
 #include "esp_timer.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
-#include "bsp/esp-bsp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -17,8 +16,6 @@ static const char *TAG = "board_power";
 // AXP2101 PMIC Register Definitions
 // =============================================================================
 #define AXP2101_I2C_ADDR             0x34
-#define AXP2101_SDA_PIN              GPIO_NUM_15
-#define AXP2101_SCL_PIN              GPIO_NUM_14
 
 #define AXP2101_REG_STATUS1          0x00  /* Bit 3: Battery present */
 #define AXP2101_REG_STATUS2          0x01  /* Bits [7:5]: Charging state */
@@ -42,7 +39,6 @@ static const char *TAG = "board_power";
 #define AXP2101_STATUS1_BATT_PRESENT (1 << 3)
 #define AXP2101_CHARGING_MASK        (0x07 << 5)
 #define AXP2101_CHARGING_ACTIVE      (0x01 << 5)
-#define AXP2101_PEKEY_PRESS_MASK     0x03  /* Bit 1: Short press, Bit 0: Long press */
 
 static i2c_master_dev_handle_t s_axp2101_dev = NULL;
 static TaskHandle_t s_power_task = NULL;
@@ -71,29 +67,10 @@ esp_err_t hal_power_init(void)
         return ESP_OK;
     }
 
-    // Attempt to reuse shared I2C master bus handle from BSP
-    i2c_master_bus_handle_t i2c_bus = bsp_i2c_get_handle();
+    i2c_master_bus_handle_t i2c_bus = hal_i2c_get_master_bus();
     if (i2c_bus == NULL) {
-        bsp_i2c_init();
-        i2c_bus = bsp_i2c_get_handle();
-    }
-
-    if (i2c_bus == NULL) {
-        ESP_LOGI(TAG, "Creating dedicated I2C master bus for AXP2101 (SDA:%d, SCL:%d)...",
-                 AXP2101_SDA_PIN, AXP2101_SCL_PIN);
-        i2c_master_bus_config_t bus_cfg = {
-            .i2c_port = I2C_NUM_0,
-            .sda_io_num = AXP2101_SDA_PIN,
-            .scl_io_num = AXP2101_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .flags.enable_internal_pullup = true,
-        };
-        esp_err_t ret = i2c_new_master_bus(&bus_cfg, &i2c_bus);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to create I2C bus for AXP2101: %s", esp_err_to_name(ret));
-            return ret;
-        }
+        ESP_LOGE(TAG, "Failed to get shared I2C master bus for AXP2101");
+        return ESP_FAIL;
     }
 
     i2c_device_config_t dev_cfg = {
@@ -400,5 +377,3 @@ bool hal_power_get_keep_screen_on(void)
 {
     return s_keep_screen_on;
 }
-
-

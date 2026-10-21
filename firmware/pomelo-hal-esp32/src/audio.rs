@@ -483,6 +483,11 @@ impl AudioBackend for EspAudio {
     }
 
     #[inline]
+    fn volume(&self) -> u8 {
+        self.volume
+    }
+
+    #[inline]
     fn is_playing(&self) -> bool {
         if let Some(ref c) = self.control {
             c.is_playing.load(Ordering::Relaxed) && !c.is_paused.load(Ordering::Relaxed)

@@ -1,6 +1,6 @@
 #include "board_hal.h"
+#include "board_hal_internal.h"
 #include "pcf85063a.h"
-#include "bsp/esp32_s3_touch_amoled_2_16.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -170,17 +170,8 @@ esp_err_t hal_rtc_init(void)
         }
     }
 
-    // Reuse shared BSP I2C master bus handle (GPIO 14 SCL, GPIO 15 SDA)
-    i2c_master_bus_handle_t i2c_bus = bsp_i2c_get_handle();
-    if (i2c_bus == NULL) {
-        esp_err_t err = bsp_i2c_init();
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize shared BSP I2C bus: %s", esp_err_to_name(err));
-            return err;
-        }
-        i2c_bus = bsp_i2c_get_handle();
-    }
-
+    // Reuse shared hardware I2C master bus handle
+    i2c_master_bus_handle_t i2c_bus = hal_i2c_get_master_bus();
     if (i2c_bus == NULL) {
         ESP_LOGE(TAG, "No I2C bus handle available for PCF85063A");
         return ESP_FAIL;

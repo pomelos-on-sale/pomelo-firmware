@@ -142,6 +142,23 @@ static void http_task(void *pvParameters)
                 break;
             }
 
+            hal_wifi_status_t wifi_status;
+            if (hal_wifi_get_status(&wifi_status) != ESP_OK || wifi_status.state != HAL_WIFI_STATE_CONNECTED) {
+                ESP_LOGW(TAG, "HTTP request aborted: Wi-Fi is not connected");
+                esp_http_client_cleanup(client);
+                lock();
+                s_status.state = HAL_HTTP_STATE_ERROR;
+                s_status.error_code = ESP_ERR_INVALID_STATE;
+                unlock();
+                hal_event_t ev = {
+                    .type = HAL_EVENT_HTTP,
+                    .data.http = { .status_code = 0, .bytes = 0, .error_code = ESP_ERR_INVALID_STATE },
+                };
+                hal_event_send(&ev);
+                open_failed = true;
+                break;
+            }
+
             esp_err_t err = esp_http_client_open(client, 0);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to open HTTP connection: %s (free heap: %u, internal: %u, dma: %u)",
@@ -344,6 +361,13 @@ esp_err_t hal_http_start(const char *url)
 
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    // Guard: reject HTTP/HTTPS request if Wi-Fi is not connected
+    hal_wifi_status_t wifi_status;
+    if (hal_wifi_get_status(&wifi_status) != ESP_OK || wifi_status.state != HAL_WIFI_STATE_CONNECTED) {
+        ESP_LOGW(TAG, "HTTP request rejected: Wi-Fi is not connected");
+        return ESP_ERR_INVALID_STATE;
     }
 
     // Guard: reject HTTPS if system time is not synchronized

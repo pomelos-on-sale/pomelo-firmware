@@ -237,7 +237,11 @@ esp_err_t hal_wifi_init(void)
         ESP_LOGW(TAG, "nvs_flash_init: %s", esp_err_to_name(ret));
     }
 
-    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t netif_ret = esp_netif_init();
+    if (netif_ret != ESP_OK && netif_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init: %s", esp_err_to_name(netif_ret));
+        return netif_ret;
+    }
 
     esp_err_t ev = esp_event_loop_create_default();
     if (ev != ESP_OK && ev != ESP_ERR_INVALID_STATE) {

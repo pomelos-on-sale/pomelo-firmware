@@ -13,7 +13,9 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "board_hal.h"
-#include "bsp/esp32_s3_touch_amoled_2_16.h"
+#include "board_pins.h"
+
+#define BOARD_SD_MOUNT_POINT "/sdcard"
 
 static const char *TAG = "board_storage";
 
@@ -26,9 +28,9 @@ static SemaphoreHandle_t s_sd_mutex = NULL;
 
 static const sdmmc_host_t s_host = SDMMC_HOST_DEFAULT();
 static const sdmmc_slot_config_t s_slot_config = {
-    .clk = BSP_SD_CLK,
-    .cmd = BSP_SD_CMD,
-    .d0 = BSP_SD_D0,
+    .clk = BOARD_PIN_SD_CLK,
+    .cmd = BOARD_PIN_SD_CMD,
+    .d0 = BOARD_PIN_SD_D0,
     .d1 = GPIO_NUM_NC,
     .d2 = GPIO_NUM_NC,
     .d3 = GPIO_NUM_NC,
@@ -128,7 +130,7 @@ static esp_err_t hal_storage_sd_mount_internal(void)
 
     // Temporarily suppress diskio_sdmmc errors during probe: an unformatted card is expected to fail mount
     esp_log_level_set("diskio_sdmmc", ESP_LOG_NONE);
-    esp_err_t mount_ret = esp_vfs_fat_mount_initialized(s_card, BSP_SD_MOUNT_POINT, &mount_config);
+    esp_err_t mount_ret = esp_vfs_fat_mount_initialized(s_card, BOARD_SD_MOUNT_POINT, &mount_config);
     esp_log_level_set("diskio_sdmmc", ESP_LOG_ERROR);
     if (mount_ret == ESP_OK) {
         s_sd_status = HAL_SD_STATUS_MOUNTED;
@@ -136,7 +138,7 @@ static esp_err_t hal_storage_sd_mount_internal(void)
         ESP_LOGI(TAG, "SD card (%s, %llu MB) mounted at %s",
                  s_card_info.name,
                  (unsigned long long)(s_card_info.total_bytes / (1024 * 1024)),
-                 BSP_SD_MOUNT_POINT);
+                 BOARD_SD_MOUNT_POINT);
     } else {
         // Hardware card is healthy, but filesystem is unformatted or unsupported (e.g. exFAT)
         // Clean up partial VFS and diskio registration left behind by failed mount
@@ -146,7 +148,7 @@ static esp_err_t hal_storage_sd_mount_internal(void)
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
         }
-        esp_vfs_fat_unregister_path(BSP_SD_MOUNT_POINT);
+        esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
 
         s_sd_status = HAL_SD_STATUS_UNFORMATTED;
         s_card_info.is_formatted = false;
@@ -165,7 +167,7 @@ static esp_err_t hal_storage_sd_mount_internal(void)
 static esp_err_t hal_storage_sd_unmount_internal(void)
 {
     if (s_sd_status == HAL_SD_STATUS_MOUNTED && s_card != NULL) {
-        esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, s_card);
+        esp_vfs_fat_sdcard_unmount(BOARD_SD_MOUNT_POINT, s_card);
         s_card = NULL;
         s_host_inited = false;
     } else if (s_sd_status == HAL_SD_STATUS_UNFORMATTED && s_card != NULL) {
@@ -175,7 +177,7 @@ static esp_err_t hal_storage_sd_unmount_internal(void)
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
         }
-        esp_vfs_fat_unregister_path(BSP_SD_MOUNT_POINT);
+        esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
         free(s_card);
         s_card = NULL;
         if (s_host.deinit_p) {
@@ -232,7 +234,7 @@ esp_err_t hal_storage_sd_get_info(hal_sd_card_info_t *out_info)
 
 static esp_err_t hal_storage_sd_format_internal(void)
 {
-    ESP_LOGI(TAG, "Formatting SD card at %s to FAT32...", BSP_SD_MOUNT_POINT);
+    ESP_LOGI(TAG, "Formatting SD card at %s to FAT32...", BOARD_SD_MOUNT_POINT);
 
     if (s_sd_status != HAL_SD_STATUS_MOUNTED && s_sd_status != HAL_SD_STATUS_UNFORMATTED) {
         ESP_LOGW(TAG, "Cannot format: no SD card detected in slot");
@@ -246,7 +248,7 @@ static esp_err_t hal_storage_sd_format_internal(void)
 
     // 1. If currently mounted, cleanly unmount and re-probe card handle
     if (s_sd_status == HAL_SD_STATUS_MOUNTED) {
-        esp_vfs_fat_sdcard_unmount(BSP_SD_MOUNT_POINT, s_card);
+        esp_vfs_fat_sdcard_unmount(BOARD_SD_MOUNT_POINT, s_card);
         s_card = NULL;
         s_host_inited = false;
         if (ensure_host_inited() != ESP_OK) {
@@ -273,7 +275,7 @@ static esp_err_t hal_storage_sd_format_internal(void)
             f_mount(0, drv, 0);
             ff_diskio_unregister(pdrv);
         }
-        esp_vfs_fat_unregister_path(BSP_SD_MOUNT_POINT);
+        esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
     }
 
     // 2. Register SDMMC driver to FatFS drive 0
@@ -312,13 +314,13 @@ static esp_err_t hal_storage_sd_format_internal(void)
     ff_diskio_unregister(pdrv);
 
     // 6. Mount the freshly formatted card
-    ESP_LOGI(TAG, "Mounting formatted SD card to %s...", BSP_SD_MOUNT_POINT);
+    ESP_LOGI(TAG, "Mounting formatted SD card to %s...", BOARD_SD_MOUNT_POINT);
     const esp_vfs_fat_mount_config_t mount_cfg = {
         .format_if_mount_failed = false,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024,
     };
-    esp_err_t mount_ret = esp_vfs_fat_mount_initialized(s_card, BSP_SD_MOUNT_POINT, &mount_cfg);
+    esp_err_t mount_ret = esp_vfs_fat_mount_initialized(s_card, BOARD_SD_MOUNT_POINT, &mount_cfg);
     if (mount_ret != ESP_OK) {
         ESP_LOGE(TAG, "Mount after format failed: %s (0x%x)", esp_err_to_name(mount_ret), mount_ret);
         BYTE cur_pdrv = ff_diskio_get_pdrv_card(s_card);
@@ -327,7 +329,7 @@ static esp_err_t hal_storage_sd_format_internal(void)
             f_mount(0, drv, 0);
             ff_diskio_unregister(cur_pdrv);
         }
-        esp_vfs_fat_unregister_path(BSP_SD_MOUNT_POINT);
+        esp_vfs_fat_unregister_path(BOARD_SD_MOUNT_POINT);
         s_sd_status = HAL_SD_STATUS_UNFORMATTED;
         notify_sd_status_changed(s_sd_status);
         return mount_ret;
@@ -338,7 +340,7 @@ static esp_err_t hal_storage_sd_format_internal(void)
     ESP_LOGI(TAG, "SD card (%s, %llu MB) successfully formatted and mounted at %s",
              s_card_info.name,
              (unsigned long long)(s_card_info.total_bytes / (1024 * 1024)),
-             BSP_SD_MOUNT_POINT);
+             BOARD_SD_MOUNT_POINT);
     notify_sd_status_changed(s_sd_status);
     return ESP_OK;
 }
@@ -359,10 +361,10 @@ esp_err_t hal_storage_sd_get_usage(uint64_t *out_total_bytes, uint64_t *out_free
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t ret = esp_vfs_fat_info(BSP_SD_MOUNT_POINT, out_total_bytes, out_free_bytes);
+    esp_err_t ret = esp_vfs_fat_info(BOARD_SD_MOUNT_POINT, out_total_bytes, out_free_bytes);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_vfs_fat_info failed for %s: %s (0x%x)",
-                 BSP_SD_MOUNT_POINT, esp_err_to_name(ret), ret);
+                 BOARD_SD_MOUNT_POINT, esp_err_to_name(ret), ret);
     } else {
         ESP_LOGD(TAG, "SD usage queried: total=%llu MB, free=%llu MB",
                  out_total_bytes ? (unsigned long long)(*out_total_bytes / (1024 * 1024)) : 0,

@@ -13,24 +13,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "bsp/esp-bsp.h"
-#include "bsp/display.h"
-#include "bsp/esp32_s3_touch_amoled_2_16.h"
-
-
 
 static const char *TAG = "board_display";
 
 static esp_lcd_panel_handle_t s_panel_handle = NULL;
 static esp_lcd_panel_io_handle_t s_io_handle = NULL;
 static SemaphoreHandle_t s_trans_done_sem = NULL;
-
-#if defined(CONFIG_BOARD_LCD_TE_GPIO) && (CONFIG_BOARD_LCD_TE_GPIO >= 0)
-#define BSP_LCD_TE CONFIG_BOARD_LCD_TE_GPIO
-#define BSP_LCD_TE_ENABLED 1
-#else
-#define BSP_LCD_TE_ENABLED 0
-#endif
 
 static SemaphoreHandle_t s_te_sem = NULL;
 static volatile uint32_t s_te_count = 0;
@@ -39,7 +27,7 @@ static int64_t s_last_frame_start_us = 0;
 static int64_t s_sleep_out_timestamp_us = 0;
 static bool s_display_active = false;
 
-#if BSP_LCD_TE_ENABLED
+#if BOARD_PIN_LCD_TE_ENABLED
 static IRAM_ATTR void s_te_gpio_isr_handler(void *arg)
 {
     s_te_count++;
@@ -161,33 +149,33 @@ esp_err_t board_display_init(void)
     }
 
     ESP_LOGI(TAG, "Initializing Waveshare 480x480 AMOLED display at 60MHz QSPI (high drive strength)...");
-    const spi_bus_config_t buscfg = CO5300_PANEL_BUS_QSPI_CONFIG(BSP_LCD_PCLK,
-                                                                 BSP_LCD_DATA0,
-                                                                 BSP_LCD_DATA1,
-                                                                 BSP_LCD_DATA2,
-                                                                 BSP_LCD_DATA3,
-                                                                 BSP_LCD_H_RES * BSP_LCD_V_RES * sizeof(uint16_t));
-    esp_err_t ret = spi_bus_initialize(BSP_LCD_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO);
+    const spi_bus_config_t buscfg = CO5300_PANEL_BUS_QSPI_CONFIG(BOARD_PIN_LCD_PCLK,
+                                                                 BOARD_PIN_LCD_DATA0,
+                                                                 BOARD_PIN_LCD_DATA1,
+                                                                 BOARD_PIN_LCD_DATA2,
+                                                                 BOARD_PIN_LCD_DATA3,
+                                                                 BOARD_DISPLAY_WIDTH * BOARD_DISPLAY_HEIGHT * sizeof(uint16_t));
+    esp_err_t ret = spi_bus_initialize(BOARD_PIN_LCD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
     // Boost QSPI GPIO output drive capability to maximum (40mA, Cap 3) for clean 60MHz signal edges
-    gpio_set_drive_capability(BSP_LCD_PCLK, GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(BSP_LCD_DATA0, GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(BSP_LCD_DATA1, GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(BSP_LCD_DATA2, GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(BSP_LCD_DATA3, GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(BSP_LCD_CS, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_PCLK, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_DATA0, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_DATA1, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_DATA2, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_DATA3, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(BOARD_PIN_LCD_CS, GPIO_DRIVE_CAP_3);
 
     s_trans_done_sem = xSemaphoreCreateBinary();
     s_te_sem = xSemaphoreCreateBinary();
 
     // Configure TE GPIO interrupt only if explicitly mapped (e.g. via TP301 jumper wire)
-#if BSP_LCD_TE_ENABLED
+#if BOARD_PIN_LCD_TE_ENABLED
     gpio_config_t te_gpio_cfg = {
-        .pin_bit_mask = BIT64(BSP_LCD_TE),
+        .pin_bit_mask = BIT64(BOARD_PIN_LCD_TE),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
@@ -198,10 +186,10 @@ esp_err_t board_display_init(void)
     if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "gpio_install_isr_service: %s", esp_err_to_name(isr_err));
     }
-    gpio_isr_handler_add(BSP_LCD_TE, s_te_gpio_isr_handler, NULL);
+    gpio_isr_handler_add(BOARD_PIN_LCD_TE, s_te_gpio_isr_handler, NULL);
 #endif
 
-    esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, s_on_color_trans_done, NULL);
+    esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BOARD_PIN_LCD_CS, s_on_color_trans_done, NULL);
     io_config.pclk_hz = 60 * 1000 * 1000; // 60MHz high-speed QSPI clock
     io_config.trans_queue_depth = 10;
 
@@ -212,16 +200,16 @@ esp_err_t board_display_init(void)
             .use_qspi_interface = 1,
         },
     };
-    ret = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM, &io_config, &s_io_handle);
+    ret = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_PIN_LCD_SPI_HOST, &io_config, &s_io_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_lcd_new_panel_io_spi failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
     const esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = BSP_LCD_RST,
+        .reset_gpio_num = BOARD_PIN_LCD_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-        .bits_per_pixel = BSP_LCD_BITS_PER_PIXEL,
+        .bits_per_pixel = BOARD_DISPLAY_BITS_PER_PIXEL,
         .vendor_config = &vendor_config,
     };
     ret = esp_lcd_new_panel_co5300(s_io_handle, &panel_config, &s_panel_handle);
@@ -238,14 +226,14 @@ esp_err_t board_display_init(void)
     ESP_LOGI(TAG, "AMOLED panel controller initialized (standby mode, blanked).");
 
     // Probe hardware TE signal only if mapped
-#if BSP_LCD_TE_ENABLED
+#if BOARD_PIN_LCD_TE_ENABLED
     vTaskDelay(pdMS_TO_TICKS(50));
     if (s_te_count >= 2) {
         s_te_active = true;
-        ESP_LOGI(TAG, "Hardware TE V-Sync interrupt active on GPIO%d (received %lu pulses).", (int)BSP_LCD_TE, (unsigned long)s_te_count);
+        ESP_LOGI(TAG, "Hardware TE V-Sync interrupt active on GPIO%d (received %lu pulses).", (int)BOARD_PIN_LCD_TE, (unsigned long)s_te_count);
     } else {
         s_te_active = false;
-        ESP_LOGI(TAG, "Hardware TE not detected on GPIO%d. Using adaptive 60Hz frame pacing.", (int)BSP_LCD_TE);
+        ESP_LOGI(TAG, "Hardware TE not detected on GPIO%d. Using adaptive 60Hz frame pacing.", (int)BOARD_PIN_LCD_TE);
     }
 #else
     s_te_active = false;

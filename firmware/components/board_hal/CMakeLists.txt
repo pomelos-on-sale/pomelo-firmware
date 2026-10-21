@@ -28,12 +28,14 @@ idf_component_register(
     INCLUDE_DIRS "."
     WHOLE_ARCHIVE
     REQUIRES
-        waveshare__esp32_s3_touch_amoled_2_16
+        waveshare__esp_lcd_touch_cst9217
         waveshare__pcf85063a
         espressif__esp_codec_dev
         espressif__esp_lcd_co5300
         esp_lcd
         esp_lcd_touch
+        esp_driver_i2s
+        esp_driver_i2c
         driver
         vfs
         fatfs
